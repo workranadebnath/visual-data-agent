@@ -23,8 +23,8 @@ def get_visual_agent():
 
     # 2. Build the Databricks SQLAlchemy URI
     # Update 'hive_metastore' and 'default' if your data is in a specific catalog/schema
-    databricks_uri = f"databricks://token:{db_token}@{db_host}?http_path={db_path}&catalog=hive_metastore&schema=default"
-    
+# 2. Build the Databricks SQLAlchemy URI (Simplified)
+    databricks_uri = f"databricks://token:{db_token}@{db_host}?http_path={db_path}"    
     # 3. Connect to Databricks
     # Note: We removed "include_tables" so the agent can autonomously scan whatever tables actually exist in your Databricks workspace.
    # ... your existing connection code ...
