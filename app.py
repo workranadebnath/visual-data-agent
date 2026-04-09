@@ -54,14 +54,22 @@ def get_visual_agent():
     python_tool = PythonAstREPLTool()
     
     custom_prefix = """You are an expert Visual Data Analyst.
-    1. For data questions, write SQL.
-    2. If the user asks for a chart, use the python_repl_ast tool.
-    3. VERY IMPORTANT FOR PLOTTING:
-       - Always import matplotlib.pyplot as plt and pandas as pd.
-       - The data from your SQL query will be a list of tuples. You MUST convert it into a pandas DataFrame before plotting.
-       - Create a figure using `fig, ax = plt.subplots()`.
-       - NEVER call plt.show(). The environment will capture the figure automatically.
-    4. Always return a final, plain-English text explanation of what the chart shows."""
+    1. For data questions, write SQL to find the answer.
+    2. If the user asks for a chart, you must use the python_repl_ast tool.
+    3. THE PYTHON REPL RULE: The Python environment DOES NOT have access to the SQL tool's output variables. You MUST hardcode the data you found from the SQL query directly into your Python code.
+    
+    Example of correct Python code:
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    # You must type out the data arrays explicitly!
+    shows = ['Stranger Things', 'Bridgerton', 'Ozark']
+    hours = [1580910000, 710050000, 281460000]
+    df = pd.DataFrame({'Show': shows, 'Hours': hours})
+    fig, ax = plt.subplots()
+    ax.barh(df['Show'], df['Hours'])
+    
+    4. NEVER call plt.show().
+    5. Always return a plain-English explanation of the final chart."""
 
     return create_sql_agent(
         llm, 
