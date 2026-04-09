@@ -8,7 +8,7 @@ from langchain_experimental.tools import PythonAstREPLTool
 
 # --- 1. UI Setup ---
 st.set_page_config(page_title="Visual Data Worker", page_icon="📈")
-st.title("📈 Visual Data Worker")
+st.title("📈 Visual Data Worker By Rana Debnath")
 st.markdown("I can now query your data **and** draw charts.")
 
 # --- 2. Initialize Agent ---
