@@ -30,21 +30,42 @@ def get_visual_agent():
     # Note: We removed "include_tables" so the agent can autonomously scan whatever tables actually exist in your Databricks workspace.
    # ... your existing connection code ...
     db = SQLDatabase.from_uri(
-        databricks_uri,
-        sample_rows_in_table_info=0 # Set to 0 to bypass the Databricks LIMIT bug
+        active_db_uri,
+        sample_rows_in_table_info=0 
     )
 
     # --- NEW: Connection Status Indicator ---
     with st.sidebar:
-        st.header("⚙️ System Status")
-        try:
-            # Attempt to fetch the table names to verify the connection is live
-            tables = db.get_usable_table_names()
-            st.success(f"✅ Connected to Databricks!")
-            st.caption(f"Found {len(tables)} accessible tables.")
-        except Exception as e:
-            st.error("❌ Databricks Connection Failed")
-            st.caption(str(e))
+        st.header("📂 Data Source")
+        
+        # 1. The drag-and-drop file uploader
+        uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
+        
+        # 2. Connection Logic
+        if uploaded_file is not None:
+            # If a file is uploaded, convert it to a local SQLite database
+            import pandas as pd
+            from sqlalchemy import create_engine
+            
+            # Read the CSV and save it to a temporary local database
+            df = pd.read_csv(uploaded_file)
+            engine = create_engine("sqlite:///temp_user_upload.db")
+            df.to_sql("uploaded_data", engine, index=False, if_exists="replace")
+            
+            st.success(f"✅ Loaded '{uploaded_file.name}' with {len(df)} rows.")
+            
+            # Point the agent to the uploaded file
+            active_db_uri = "sqlite:///temp_user_upload.db"
+            
+        else:
+            # If no file is uploaded, default back to your live Databricks connection
+            st.caption("No file uploaded. Defaulting to Enterprise Databricks connection.")
+            
+            db_host = st.secrets["DATABRICKS_HOST"]
+            db_path = st.secrets["DATABRICKS_HTTP_PATH"]
+            db_token = st.secrets["DATABRICKS_TOKEN"]
+            
+            active_db_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=samples&schema=nyctaxi"
     # ----------------------------------------
     
     # We use Gemini 1.5 Pro for visualization as it is better at writing plotting code
@@ -113,7 +134,7 @@ if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product c
                 # Plotting logic (same as before)
                 fig = plt.gcf()
                 if fig.get_axes():
-                    st.pyplot(fig)
+                    st.pyplot(fig, use_container_width=True)
                     plt.clf() 
                 
                 # --- Bulletproof Output Parser V2 ---
