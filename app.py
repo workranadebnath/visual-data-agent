@@ -89,8 +89,17 @@ if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product c
                     st.pyplot(fig)
                     plt.clf() 
                 
-                final_text = response.get('output', str(response))
+              # --- Bulletproof Output Parser ---
+                raw_output = response.get('output', '')
+                
+                if isinstance(raw_output, list) and len(raw_output) > 0 and isinstance(raw_output[0], dict):
+                    # Extracts just the 'text' value from the messy API payload
+                    final_text = raw_output[0].get('text', str(raw_output))
+                else:
+                    final_text = str(raw_output)
+                    
                 st.markdown(final_text)
+                # ---------------------------------
                 
                 st.session_state.messages.append({"role": "assistant", "content": final_text})
                 
