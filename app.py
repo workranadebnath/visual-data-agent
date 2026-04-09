@@ -56,26 +56,38 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
 
 # --- 4. Input & Execution ---
+# --- 4. Input & Execution (Upgraded with Memory) ---
 if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product category"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        # We use a container to catch both text and charts
         container = st.container()
-        with st.spinner("Generating visualization..."):
+        with st.spinner("Analyzing database and conversation history..."):
             try:
-                # We use a trick here: we capture the current matplotlib figure
-                response = agent.invoke({"input": prompt})
+                # --- NEW MEMORY LOGIC ---
+                # We grab the last 4 messages from Streamlit's history so the agent remembers context
+                # We limit it to 4 to save API tokens and keep the agent focused
+                chat_history = ""
+                if len(st.session_state.messages) > 1:
+                    chat_history = "Context from recent conversation:\n"
+                    for msg in st.session_state.messages[-5:-1]: # Get previous messages excluding the current prompt
+                        role = "User" if msg["role"] == "user" else "Data Worker"
+                        chat_history += f"{role}: {msg['content']}\n"
                 
-                # Check if a plot was created in the global matplotlib state
+                # Combine the memory with the user's new question
+                contextual_prompt = f"{chat_history}\n\nNew Request: {prompt}"
+                # -------------------------
+
+                # We pass the combined prompt to the agent
+                response = agent.invoke({"input": contextual_prompt})
+                
+                # Plotting logic (same as before)
                 fig = plt.gcf()
-                
-                # If the figure has axes (meaning something was drawn)
                 if fig.get_axes():
                     st.pyplot(fig)
-                    plt.clf() # Clear for the next run
+                    plt.clf() 
                 
                 final_text = response.get('output', str(response))
                 st.markdown(final_text)
