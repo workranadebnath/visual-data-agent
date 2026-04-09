@@ -1,5 +1,7 @@
 import os
 import streamlit as st
+import matplotlib
+matplotlib.use('Agg') # THIS IS THE FIX FOR CLOUD DEPLOYMENTS
 import matplotlib.pyplot as plt
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits import create_sql_agent
