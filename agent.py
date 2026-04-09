@@ -4,7 +4,7 @@ from langchain_community.agent_toolkits import create_sql_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 # 1. Set your Gemini API Key
-os.environ["GOOGLE_API_KEY"] = "AIzaSyCSFrzGcTUJg98On7CDgbIGWSvNUmybVRg"
+os.environ["GOOGLE_API_KEY"] = "google api"
 
 # 2. Connect the "Tool" (The Database)
 # Guardrail: We explicitly tell the agent which tables exist and show it 3 sample rows
