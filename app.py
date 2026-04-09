@@ -25,8 +25,8 @@ def get_visual_agent():
 
     # 2. Build the Bulletproof Databricks URI
     # We explicitly add port 443 and point it to the built-in 'samples' dataset
-    databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=samples&schema=nyctaxi"  
-    # 3. Connect to Databricks
+    # Pointing the agent to your custom viewership data
+    databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=data_agent_app&schema=data_agent"    # 3. Connect to Databricks
     # Note: We removed "include_tables" so the agent can autonomously scan whatever tables actually exist in your Databricks workspace.
    # ... your existing connection code ...
     db = SQLDatabase.from_uri(
