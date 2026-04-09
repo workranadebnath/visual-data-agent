@@ -16,15 +16,14 @@ st.markdown("I can now query your data **and** draw charts.")
 def get_visual_agent():
     # Replace with your actual key
     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
-   # 1. Pull secure credentials from Streamlit Secrets
+    # 1. Pull secure credentials from Streamlit Secrets
     db_host = st.secrets["DATABRICKS_HOST"]
     db_path = st.secrets["DATABRICKS_HTTP_PATH"]
     db_token = st.secrets["DATABRICKS_TOKEN"]
 
-    # 2. Build the Databricks SQLAlchemy URI
-    # Update 'hive_metastore' and 'default' if your data is in a specific catalog/schema
-# 2. Build the Databricks SQLAlchemy URI (Simplified)
-    databricks_uri = f"databricks://token:{db_token}@{db_host}?http_path={db_path}"    
+    # 2. Build the Bulletproof Databricks URI
+    # We explicitly add port 443 and point it to the built-in 'samples' dataset
+    databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=samples&schema=nyctaxi"  
     # 3. Connect to Databricks
     # Note: We removed "include_tables" so the agent can autonomously scan whatever tables actually exist in your Databricks workspace.
    # ... your existing connection code ...
