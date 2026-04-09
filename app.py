@@ -28,8 +28,7 @@ def get_visual_agent():
     # Note: We removed "include_tables" so the agent can autonomously scan whatever tables actually exist in your Databricks workspace.
    # ... your existing connection code ...
     db = SQLDatabase.from_uri(
-        databricks_uri,
-        sample_rows_in_table_info=3 
+        databricks_uri
     )
 
     # --- NEW: Connection Status Indicator ---
