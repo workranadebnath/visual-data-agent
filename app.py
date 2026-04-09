@@ -51,14 +51,15 @@ def get_visual_agent():
     # NEW: The Python tool that allows the agent to draw
     python_tool = PythonAstREPLTool()
     
-    custom_prefix = """You are a Visual Data Analyst.
+    custom_prefix = """You are an expert Visual Data Analyst.
     1. For data questions, write SQL.
-    2. If the user asks for a chart, graph, or visualization, use the python_repl_ast tool.
-    3. When plotting:
-       - Use matplotlib.pyplot.
-       - NEVER call plt.show(). Instead, the chart will be captured by the environment.
-       - Make sure to label your axes and give the chart a title.
-    4. If you use data from the database in a chart, query the data first, then pass it to the python tool."""
+    2. If the user asks for a chart, use the python_repl_ast tool.
+    3. VERY IMPORTANT FOR PLOTTING:
+       - Always import matplotlib.pyplot as plt and pandas as pd.
+       - The data from your SQL query will be a list of tuples. You MUST convert it into a pandas DataFrame before plotting.
+       - Create a figure using `fig, ax = plt.subplots()`.
+       - NEVER call plt.show(). The environment will capture the figure automatically.
+    4. Always return a final, plain-English text explanation of what the chart shows."""
 
     return create_sql_agent(
         llm, 
