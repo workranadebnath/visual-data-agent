@@ -16,10 +16,35 @@ st.markdown("I can now query your data **and** draw charts.")
 def get_visual_agent():
     # Replace with your actual key
     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+   # 1. Pull secure credentials from Streamlit Secrets
+    db_host = st.secrets["DATABRICKS_HOST"]
+    db_path = st.secrets["DATABRICKS_HTTP_PATH"]
+    db_token = st.secrets["DATABRICKS_TOKEN"]
+
+    # 2. Build the Databricks SQLAlchemy URI
+    # Update 'hive_metastore' and 'default' if your data is in a specific catalog/schema
+    databricks_uri = f"databricks://token:{db_token}@{db_host}?http_path={db_path}&catalog=hive_metastore&schema=default"
+    
+    # 3. Connect to Databricks
+    # Note: We removed "include_tables" so the agent can autonomously scan whatever tables actually exist in your Databricks workspace.
+   # ... your existing connection code ...
     db = SQLDatabase.from_uri(
-        "sqlite:///enterprise_data.db", 
-        include_tables=['employees', 'customers', 'products', 'sales']
+        databricks_uri,
+        sample_rows_in_table_info=3 
     )
+
+    # --- NEW: Connection Status Indicator ---
+    with st.sidebar:
+        st.header("⚙️ System Status")
+        try:
+            # Attempt to fetch the table names to verify the connection is live
+            tables = db.get_usable_table_names()
+            st.success(f"✅ Connected to Databricks!")
+            st.caption(f"Found {len(tables)} accessible tables.")
+        except Exception as e:
+            st.error("❌ Databricks Connection Failed")
+            st.caption(str(e))
+    # ----------------------------------------
     
     # We use Gemini 1.5 Pro for visualization as it is better at writing plotting code
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
