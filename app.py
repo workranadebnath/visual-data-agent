@@ -15,7 +15,7 @@ st.markdown("I can now query your data **and** draw charts.")
 @st.cache_resource
 def get_visual_agent():
     # Replace with your actual key
-    os.environ["GOOGLE_API_KEY"] = "AIzaSyCSFrzGcTUJg98On7CDgbIGWSvNUmybVRg"
+    os.environ["GOOGLE_API_KEY"] = "google api"
     
     db = SQLDatabase.from_uri(
         "sqlite:///enterprise_data.db", 
