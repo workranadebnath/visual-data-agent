@@ -5,7 +5,7 @@ matplotlib.use('Agg') # THIS IS THE FIX FOR CLOUD DEPLOYMENTS
 import matplotlib.pyplot as plt
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits import create_sql_agent
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlockThreshold
 from langchain_experimental.tools import PythonAstREPLTool
 
 # --- 1. UI Setup ---
@@ -47,8 +47,18 @@ def get_visual_agent():
             st.caption(str(e))
     # ----------------------------------------
     
-    # We use Gemini 1.5 Pro for visualization as it is better at writing plotting code
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+    # We use Gemini 2.5 Flash, but we turn down the default safety filters 
+    # to prevent false positives from blocking our database queries.
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash", 
+        temperature=0,
+        safety_settings={
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        }
+    )
     
     # NEW: The Python tool that allows the agent to draw
     python_tool = PythonAstREPLTool()
