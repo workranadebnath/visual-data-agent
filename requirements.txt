@@ -7,5 +7,4 @@ langchain-community
 langchain-google-genai
 langchain-experimental
 databricks-sql-connector
-databricks-sqlalchemy
 openpyxl
