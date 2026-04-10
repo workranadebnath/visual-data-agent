@@ -56,7 +56,6 @@ with st.sidebar:
             sql = f"INSERT INTO {table.name} ({', '.join(keys)}) VALUES {', '.join(values)}"
             conn.execute(text(sql))
         # ------------------------------------------------
-        # ------------------------------------------------
 
         with st.spinner("Processing and uploading to Databricks..."):
             
@@ -69,8 +68,8 @@ with st.sidebar:
                     clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())
                     df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
                     
-                    # Note the new method=databricks_insert argument!
-                    df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=100, method=databricks_insert)
+                    # UPDATED: chunksize is now 2000 for speed
+                    df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
                     st.success(f"✅ Sheet '{sheet_name}' saved as table `{clean_name}`")
             
             # --- CSV HANDLING ---
@@ -80,8 +79,8 @@ with st.sidebar:
                 clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower())
                 df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
                 
-                # Note the new method=databricks_insert argument!
-                df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=100, method=databricks_insert)
+                # UPDATED: chunksize is now 2000 for speed
+                df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
                 st.success(f"✅ File saved as table `{clean_name}`")
 
         st.caption("Upload complete. You can now chat with this data.")
