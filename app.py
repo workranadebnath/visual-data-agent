@@ -211,7 +211,7 @@ with st.sidebar:
             # Build FAISS Vector Database using Google Embeddings
             try:
                 embeddings = GoogleGenerativeAIEmbeddings(
-                    model="models/text-embedding-004",
+                    model="models/embedding-001",
                     google_api_key=st.secrets["GOOGLE_API_KEY"]
                 )
                 vectorstore = FAISS.from_documents(splits, embeddings)
