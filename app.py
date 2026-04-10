@@ -4,7 +4,13 @@ from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
 from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlockThreshold
 from langchain_experimental.tools import PythonAstREPLTool
-from langgraph.prebuilt import create_react_agent # --- NEW: LangGraph Engine ---
+
+# --- NEW: We import the raw LangGraph components instead of the broken helper ---
+from langgraph.graph import StateGraph, END, START
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
+from typing import TypedDict, Annotated, Sequence
+from langchain_core.messages import BaseMessage, SystemMessage
 
 import pandas as pd
 from sqlalchemy import create_engine, text
@@ -22,7 +28,11 @@ db_token = st.secrets["DATABRICKS_TOKEN"]
 
 databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=data_agent_app&schema=data_agent"
 
-# --- 3. Initialize LangGraph Agent ---
+# --- NEW: Define the Graph's Memory State ---
+class AgentState(TypedDict):
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+
+# --- 3. Initialize Explicit LangGraph ---
 @st.cache_resource
 def get_visual_agent():
     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
@@ -33,7 +43,7 @@ def get_visual_agent():
     )
     
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-1.5-flash", 
         temperature=0,
         safety_settings={
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
@@ -43,12 +53,10 @@ def get_visual_agent():
         }
     )
     
-    # --- NEW: Extracting the core SQL tools so LangGraph can use them ---
     toolkit = SQLDatabaseToolkit(db=db, llm=llm)
     sql_tools = toolkit.get_tools()
     python_tool = PythonAstREPLTool()
     
-    # Combine the tools
     all_tools = sql_tools + [python_tool]
     
     custom_prefix = """You are an expert Visual Data Analyst.
@@ -73,8 +81,39 @@ def get_visual_agent():
     
     7. Always return a plain-English explanation of the final chart."""
 
-    # --- NEW: Build the LangGraph React Agent ---
-    return create_react_agent(llm, all_tools, state_modifier=custom_prefix)
+    # --- NEW: Build the State Machine Explicitly ---
+    
+    # 1. Give the AI its tools
+    llm_with_tools = llm.bind_tools(all_tools)
+    
+    # 2. Define the "Thinking" Node
+    def call_model(state: AgentState):
+        messages = [SystemMessage(content=custom_prefix)] + list(state["messages"])
+        response = llm_with_tools.invoke(messages)
+        return {"messages": [response]}
+        
+    # 3. Define the "Acting" Node
+    tool_node = ToolNode(all_tools)
+    
+    # 4. Define the routing logic (The Self-Healing Loop)
+    def should_continue(state: AgentState):
+        last_message = state["messages"][-1]
+        # If the AI decided to use a tool, route to the tool node
+        if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+            return "tools"
+        # Otherwise, the task is finished
+        return END
+        
+    # 5. Wire the graph together
+    workflow = StateGraph(AgentState)
+    workflow.add_node("agent", call_model)
+    workflow.add_node("tools", tool_node)
+    
+    workflow.add_edge(START, "agent")
+    workflow.add_conditional_edges("agent", should_continue)
+    workflow.add_edge("tools", "agent")
+    
+    return workflow.compile()
 
 # --- 4. Sidebar: Enterprise Data Ingestion ---
 with st.sidebar:
@@ -156,17 +195,14 @@ if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product c
                 if 'current_fig' in st.session_state:
                     del st.session_state['current_fig']
                 
-                # --- NEW: Formatting the memory explicitly for LangGraph ---
                 lg_messages = []
                 if len(st.session_state.messages) > 1:
                     for msg in st.session_state.messages[-5:-1]:
-                        # Append tuples of (role, content) for the state graph
                         lg_messages.append((msg["role"], msg["content"]))
                 
-                # Add the user's current prompt
                 lg_messages.append(("user", prompt))
 
-                # --- NEW: Invoking the Graph ---
+                # --- Execute the Graph ---
                 response = agent.invoke({"messages": lg_messages})
                 
                 # Extract the final text from the last message in the graph's state
