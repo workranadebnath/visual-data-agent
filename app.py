@@ -202,6 +202,12 @@ with st.sidebar:
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
             splits = text_splitter.split_documents(pages)
             
+            # --- NEW: Safety net for empty or scanned PDFs ---
+            if not splits:
+                st.error("⚠️ Could not extract any text from this PDF. Please ensure it is a text-based PDF (where you can highlight words) and not a scanned image.")
+                os.remove(tmp_file_path)
+                st.stop()
+            
             # Build FAISS Vector Database using Google Embeddings
             embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
             vectorstore = FAISS.from_documents(splits, embeddings)
