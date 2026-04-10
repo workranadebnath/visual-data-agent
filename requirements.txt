@@ -9,3 +9,4 @@ langchain-experimental
 databricks-sql-connector
 databricks-sqlalchemy
 openpyxl
+langgraph

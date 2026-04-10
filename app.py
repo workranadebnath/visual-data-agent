@@ -1,9 +1,10 @@
 import os
 import streamlit as st
 from langchain_community.utilities import SQLDatabase
-from langchain_community.agent_toolkits import create_sql_agent
+from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
 from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlockThreshold
 from langchain_experimental.tools import PythonAstREPLTool
+from langgraph.prebuilt import create_react_agent # --- NEW: LangGraph Engine ---
 
 import pandas as pd
 from sqlalchemy import create_engine, text
@@ -12,7 +13,7 @@ import re
 # --- 1. UI Setup ---
 st.set_page_config(page_title="Visual Data Worker", page_icon="📈")
 st.title("📈 Visual Data Worker By Rana Debnath")
-st.markdown("I can now query your data **and** draw interactive charts.")
+st.markdown("I can now query your data, draw charts, and **self-heal my own code.**")
 
 # --- 2. Credentials ---
 db_host = st.secrets["DATABRICKS_HOST"]
@@ -21,7 +22,7 @@ db_token = st.secrets["DATABRICKS_TOKEN"]
 
 databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=data_agent_app&schema=data_agent"
 
-# --- 3. Initialize Agent Function ---
+# --- 3. Initialize LangGraph Agent ---
 @st.cache_resource
 def get_visual_agent():
     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
@@ -42,40 +43,38 @@ def get_visual_agent():
         }
     )
     
+    # --- NEW: Extracting the core SQL tools so LangGraph can use them ---
+    toolkit = SQLDatabaseToolkit(db=db, llm=llm)
+    sql_tools = toolkit.get_tools()
     python_tool = PythonAstREPLTool()
     
+    # Combine the tools
+    all_tools = sql_tools + [python_tool]
+    
     custom_prefix = """You are an expert Visual Data Analyst.
-    1. For data questions, write SQL to find the answer.
+    1. For data questions, use the SQL tools to find the answer.
     2. If the user asks for a chart, you must use the python_repl_ast tool.
     3. THE PLOTLY RULE: You must use plotly.express to draw charts. NEVER use matplotlib.
     4. THE STREAMLIT RULE: To show the chart to the user, you MUST save the figure to Streamlit's session state under the exact key 'current_fig'.
     5. THE HARDCODE RULE: The Python environment DOES NOT have access to the SQL tool's output variables. You MUST hardcode the data arrays explicitly.
+    6. THE SELF-HEALING RULE: If your python_repl_ast tool returns an error, read the error, fix your code, and run the tool again until it succeeds!
     
     Example of correct Python code:
     import plotly.express as px
     import pandas as pd
     import streamlit as st
     
-    # You must type out the data arrays explicitly!
     shows = ['Stranger Things', 'Bridgerton', 'Ozark']
     hours = [1580910000, 710050000, 281460000]
     df = pd.DataFrame({{'Show': shows, 'Hours': hours}})
     
     fig = px.bar(df, x='Hours', y='Show', orientation='h', title='Top Shows')
-    
-    # THIS IS HOW YOU PASS THE CHART BACK TO THE USER:
     st.session_state['current_fig'] = fig
     
-    6. Always return a plain-English explanation of the final chart."""
+    7. Always return a plain-English explanation of the final chart."""
 
-    return create_sql_agent(
-        llm, 
-        db=db, 
-        agent_type="tool-calling", 
-        verbose=True, 
-        prefix=custom_prefix,
-        extra_tools=[python_tool]
-    )
+    # --- NEW: Build the LangGraph React Agent ---
+    return create_react_agent(llm, all_tools, state_modifier=custom_prefix)
 
 # --- 4. Sidebar: Enterprise Data Ingestion ---
 with st.sidebar:
@@ -134,13 +133,12 @@ with st.sidebar:
 # --- 5. Instantiate Agent ---
 agent = get_visual_agent()
 
-# --- 6. Chat History (UPDATED to load saved charts) ---
+# --- 6. Chat History ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        # If this specific message has a saved chart, draw it first!
         if "chart" in message and message["chart"] is not None:
             st.plotly_chart(message["chart"], use_container_width=True)
         st.markdown(message["content"])
@@ -153,47 +151,34 @@ if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product c
 
     with st.chat_message("assistant"):
         container = st.container()
-        with st.spinner("Analyzing database and drawing chart..."):
+        with st.spinner("Analyzing database, writing code, and self-correcting..."):
             try:
-                # Clear out any old charts from the hook before we start thinking
                 if 'current_fig' in st.session_state:
                     del st.session_state['current_fig']
                 
-                chat_history = ""
+                # --- NEW: Formatting the memory explicitly for LangGraph ---
+                lg_messages = []
                 if len(st.session_state.messages) > 1:
-                    chat_history = "Context from recent conversation:\n"
                     for msg in st.session_state.messages[-5:-1]:
-                        role = "User" if msg["role"] == "user" else "Data Worker"
-                        chat_history += f"{role}: {msg['content']}\n"
+                        # Append tuples of (role, content) for the state graph
+                        lg_messages.append((msg["role"], msg["content"]))
                 
-                contextual_prompt = f"{chat_history}\n\nNew Request: {prompt}"
+                # Add the user's current prompt
+                lg_messages.append(("user", prompt))
 
-                response = agent.invoke({"input": contextual_prompt})
+                # --- NEW: Invoking the Graph ---
+                response = agent.invoke({"messages": lg_messages})
                 
-                raw_output = response.get('output', '')
-                final_text = ""
-
-                if isinstance(raw_output, list):
-                    for item in raw_output:
-                        if isinstance(item, dict):
-                            final_text += item.get('text', '')
-                        elif isinstance(item, str):
-                            final_text += item
-                else:
-                    final_text = str(raw_output)
-                    
-                final_text = final_text.strip()
+                # Extract the final text from the last message in the graph's state
+                final_text = response["messages"][-1].content
                 
-                # --- NEW: Retrieve the chart the AI just built from the hook ---
                 generated_chart = st.session_state.get('current_fig', None)
                 
-                # Draw it immediately
                 if generated_chart:
                     st.plotly_chart(generated_chart, use_container_width=True)
                 
                 st.markdown(final_text)
                 
-                # --- NEW: Save the text AND the chart together in memory ---
                 st.session_state.messages.append({
                     "role": "assistant", 
                     "content": final_text,
