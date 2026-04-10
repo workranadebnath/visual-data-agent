@@ -17,69 +17,66 @@ st.set_page_config(page_title="Visual Data Worker", page_icon="📈")
 st.title("📈 Visual Data Worker By Rana Debnath")
 st.markdown("I can now query your data **and** draw charts.")
 
-# --- 2. Initialize Agent ---
+# --- 2. Sidebar: Enterprise Data Ingestion ---
+# MOVED OUTSIDE THE CACHED FUNCTION TO FIX WARNING
+db_host = st.secrets["DATABRICKS_HOST"]
+db_path = st.secrets["DATABRICKS_HTTP_PATH"]
+db_token = st.secrets["DATABRICKS_TOKEN"]
+
+# Build the Databricks URI
+databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=data_agent_app&schema=data_agent"
+
+with st.sidebar:
+    st.header("📂 Enterprise Data Ingestion")
+    
+    # Allow both CSV and Excel uploads
+    uploaded_file = st.file_uploader("Upload Data (CSV or Excel)", type=["csv", "xlsx"])
+    
+    if uploaded_file is not None:
+        # Create a connection engine to your Databricks
+        engine = create_engine(databricks_uri)
+        
+        with st.spinner("Processing and uploading to Databricks..."):
+            
+            # --- EXCEL HANDLING ---
+            if uploaded_file.name.endswith('.xlsx'):
+                # Read ALL sheets into a dictionary: { 'Sheet1': df1, 'Sheet2': df2 }
+                excel_data = pd.read_excel(uploaded_file, sheet_name=None)
+                st.info(f"Found {len(excel_data)} sheets. Uploading...")
+                
+                for sheet_name, df in excel_data.items():
+                    # Sanitize table names (Databricks hates spaces and special characters)
+                    clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())
+                    
+                    # Push directly into Databricks!
+                    df.to_sql(clean_name, con=engine, if_exists="replace", index=False)
+                    st.success(f"✅ Sheet '{sheet_name}' saved as table `{clean_name}`")
+            
+            # --- CSV HANDLING ---
+            elif uploaded_file.name.endswith('.csv'):
+                df = pd.read_csv(uploaded_file)
+                
+                # Use the filename (minus the .csv) as the table name
+                raw_name = uploaded_file.name.rsplit('.', 1)[0]
+                clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower())
+                
+                df.to_sql(clean_name, con=engine, if_exists="replace", index=False)
+                st.success(f"✅ File saved as table `{clean_name}`")
+
+        st.caption("Upload complete. You can now chat with this data.")
+
+
+# --- 3. Initialize Agent ---
 @st.cache_resource
 def get_visual_agent():
     # Replace with your actual key
     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
-    # 1. Pull secure credentials from Streamlit Secrets
-    db_host = st.secrets["DATABRICKS_HOST"]
-    db_path = st.secrets["DATABRICKS_HTTP_PATH"]
-    db_token = st.secrets["DATABRICKS_TOKEN"]
 
-    # 2. Build the Bulletproof Databricks URI
-    # We explicitly add port 443 and point it to the built-in 'samples' dataset
-    # Pointing the agent to your custom viewership data
-    databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=data_agent_app&schema=data_agent"    # 3. Connect to Databricks
-    # Note: We removed "include_tables" so the agent can autonomously scan whatever tables actually exist in your Databricks workspace.
-   # ... your existing connection code ...
+    # Connect to Databricks
     db = SQLDatabase.from_uri(
         databricks_uri,
         sample_rows_in_table_info=0 # Set to 0 to bypass the Databricks LIMIT bug
     )
-
-    # --- NEW: Connection Status Indicator ---
-
-    with st.sidebar:
-        st.header("📂 Enterprise Data Ingestion")
-        
-        # 1. Allow both CSV and Excel uploads
-        uploaded_file = st.file_uploader("Upload Data (CSV or Excel)", type=["csv", "xlsx"])
-        
-        if uploaded_file is not None:
-            # Create a connection engine to your Databricks
-            # (Assuming you still have your databricks_uri defined above this)
-            engine = create_engine(databricks_uri)
-            
-            with st.spinner("Processing and uploading to Databricks..."):
-                
-                # --- EXCEL HANDLING ---
-                if uploaded_file.name.endswith('.xlsx'):
-                    # Read ALL sheets into a dictionary: { 'Sheet1': df1, 'Sheet2': df2 }
-                    excel_data = pd.read_excel(uploaded_file, sheet_name=None)
-                    st.info(f"Found {len(excel_data)} sheets. Uploading...")
-                    
-                    for sheet_name, df in excel_data.items():
-                        # Sanitize table names (Databricks hates spaces and special characters)
-                        clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())
-                        
-                        # Push directly into Databricks!
-                        df.to_sql(clean_name, con=engine, if_exists="replace", index=False)
-                        st.success(f"✅ Sheet '{sheet_name}' saved as table `{clean_name}`")
-                
-                # --- CSV HANDLING ---
-                elif uploaded_file.name.endswith('.csv'):
-                    df = pd.read_csv(uploaded_file)
-                    
-                    # Use the filename (minus the .csv) as the table name
-                    raw_name = uploaded_file.name.rsplit('.', 1)[0]
-                    clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower())
-                    
-                    df.to_sql(clean_name, con=engine, if_exists="replace", index=False)
-                    st.success(f"✅ File saved as table `{clean_name}`")
-
-            st.caption("Upload complete. You can now chat with this data.")
-    # ----------------------------------------
     
     # We use Gemini 2.5 Flash, but we turn down the default safety filters 
     # to prevent false positives from blocking our database queries.
@@ -94,7 +91,7 @@ def get_visual_agent():
         }
     )
     
-    # NEW: The Python tool that allows the agent to draw
+    # The Python tool that allows the agent to draw
     python_tool = PythonAstREPLTool()
     
     custom_prefix = """You are an expert Visual Data Analyst.
@@ -126,7 +123,7 @@ def get_visual_agent():
 
 agent = get_visual_agent()
 
-# --- 3. Chat History ---
+# --- 4. Chat History ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -134,8 +131,7 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# --- 4. Input & Execution ---
-# --- 4. Input & Execution (Upgraded with Memory) ---
+# --- 5. Input & Execution ---
 if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product category"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -145,9 +141,7 @@ if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product c
         container = st.container()
         with st.spinner("Analyzing database and conversation history..."):
             try:
-                # --- NEW MEMORY LOGIC ---
-                # We grab the last 4 messages from Streamlit's history so the agent remembers context
-                # We limit it to 4 to save API tokens and keep the agent focused
+                # --- MEMORY LOGIC ---
                 chat_history = ""
                 if len(st.session_state.messages) > 1:
                     chat_history = "Context from recent conversation:\n"
@@ -157,12 +151,11 @@ if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product c
                 
                 # Combine the memory with the user's new question
                 contextual_prompt = f"{chat_history}\n\nNew Request: {prompt}"
-                # -------------------------
 
-                # We pass the combined prompt to the agent
+                # Pass the combined prompt to the agent
                 response = agent.invoke({"input": contextual_prompt})
                 
-                # Plotting logic (same as before)
+                # Plotting logic
                 fig = plt.gcf()
                 if fig.get_axes():
                     st.pyplot(fig, use_container_width=True)
@@ -187,8 +180,6 @@ if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product c
                 final_text = final_text.strip()
                 
                 st.markdown(final_text)
-                # ------------------------------------
-                
                 st.session_state.messages.append({"role": "assistant", "content": final_text})
                 
             except Exception as e:
