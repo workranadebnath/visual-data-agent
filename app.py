@@ -1,8 +1,5 @@
 import os
 import streamlit as st
-import matplotlib
-matplotlib.use('Agg') # THIS IS THE FIX FOR CLOUD DEPLOYMENTS
-import matplotlib.pyplot as plt
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits import create_sql_agent
 from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlockThreshold
@@ -47,7 +44,6 @@ def get_visual_agent():
     
     python_tool = PythonAstREPLTool()
     
-    # --- UPDATED: The new Session State Hook rule ---
     custom_prefix = """You are an expert Visual Data Analyst.
     1. For data questions, write SQL to find the answer.
     2. If the user asks for a chart, you must use the python_repl_ast tool.
