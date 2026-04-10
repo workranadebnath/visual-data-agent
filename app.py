@@ -209,7 +209,10 @@ with st.sidebar:
                 st.stop()
             
             # Build FAISS Vector Database using Google Embeddings
-            embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+            embeddings = GoogleGenerativeAIEmbeddings(
+                model="models/text-embedding-004",
+                google_api_key=st.secrets["GOOGLE_API_KEY"]
+            )
             vectorstore = FAISS.from_documents(splits, embeddings)
             
             # Save to session memory and clear temp file
