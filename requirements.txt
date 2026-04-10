@@ -9,6 +9,7 @@ langchain-google-genai
 langchain-experimental
 langchain-text-splitters
 databricks-sql-connector
+databricks-sqlalchemy
 openpyxl
 langgraph
 pypdf
