@@ -205,8 +205,19 @@ if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product c
                 # --- Execute the Graph ---
                 response = agent.invoke({"messages": lg_messages})
                 
-                # Extract the final text from the last message in the graph's state
-                final_text = response["messages"][-1].content
+                # Extract the raw content from the last message
+                raw_content = response["messages"][-1].content
+                
+                # --- NEW: Robust parser to clean up Gemini's raw dictionary blocks ---
+                final_text = ""
+                if isinstance(raw_content, list):
+                    for item in raw_content:
+                        if isinstance(item, dict):
+                            final_text += item.get('text', '')
+                        else:
+                            final_text += str(item)
+                else:
+                    final_text = str(raw_content)
                 
                 generated_chart = st.session_state.get('current_fig', None)
                 
