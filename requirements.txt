@@ -14,3 +14,4 @@ openpyxl
 langgraph
 pypdf
 faiss-cpu
+sentence-transformers

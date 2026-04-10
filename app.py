@@ -22,6 +22,7 @@ from langchain_core.messages import BaseMessage, SystemMessage
 import pandas as pd
 from sqlalchemy import create_engine, text
 import re
+from langchain_community.embeddings import HuggingFaceEmbeddings
 
 # --- 1. UI Setup ---
 st.set_page_config(page_title="Visual Data Worker", page_icon="📈", layout="wide")
@@ -208,15 +209,12 @@ with st.sidebar:
                 os.remove(tmp_file_path)
                 st.stop()
             
-            # Build FAISS Vector Database using Google Embeddings
+            # Build FAISS Vector Database using Local HuggingFace Embeddings
             try:
-                embeddings = GoogleGenerativeAIEmbeddings(
-                    model="models/embedding-001",
-                    google_api_key=st.secrets["GOOGLE_API_KEY"]
-                )
+                embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
                 vectorstore = FAISS.from_documents(splits, embeddings)
             except Exception as e:
-                st.error(f"🛑 Google API Rejected the PDF. Exact Reason: {e}")
+                st.error(f"🛑 Vectorization Failed: {e}")
                 os.remove(tmp_file_path)
                 st.stop()
             
