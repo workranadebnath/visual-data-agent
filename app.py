@@ -40,22 +40,22 @@ with st.sidebar:
         # --- NEW: The Bulletproof Custom Insert Method ---
         def databricks_insert(table, conn, keys, data_iter):
             """Bypasses Databricks parameter bugs by forcing raw SQL strings"""
-            for data in data_iter:
-                values = []
-                for row in data:
-                    formatted_row = []
-                    for val in row:
-                        if pd.isna(val):
-                            formatted_row.append("NULL")
-                        else:
-                            # Wrap everything in quotes and escape single quotes safely
-                            val_str = str(val).replace("'", "''")
-                            formatted_row.append(f"'{val_str}'")
-                    values.append(f"({', '.join(formatted_row)})")
-                
-                # Build and execute the raw SQL string
-                sql = f"INSERT INTO {table.name} ({', '.join(keys)}) VALUES {', '.join(values)}"
-                conn.execute(text(sql))
+            values = []
+            for row in data_iter: # Loop through each row in the chunk
+                formatted_row = []
+                for val in row:   # Loop through each cell in the row
+                    if pd.isna(val):
+                        formatted_row.append("NULL")
+                    else:
+                        # Wrap everything in quotes and escape single quotes safely
+                        val_str = str(val).replace("'", "''")
+                        formatted_row.append(f"'{val_str}'")
+                values.append(f"({', '.join(formatted_row)})")
+            
+            # Build and execute the raw SQL string
+            sql = f"INSERT INTO {table.name} ({', '.join(keys)}) VALUES {', '.join(values)}"
+            conn.execute(text(sql))
+        # ------------------------------------------------
         # ------------------------------------------------
 
         with st.spinner("Processing and uploading to Databricks..."):
