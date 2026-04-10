@@ -1,5 +1,8 @@
 import os
 import streamlit as st
+import matplotlib
+matplotlib.use('Agg') # THIS IS THE FIX FOR CLOUD DEPLOYMENTS
+import matplotlib.pyplot as plt
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits import create_sql_agent
 from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlockThreshold
@@ -44,12 +47,12 @@ def get_visual_agent():
     
     python_tool = PythonAstREPLTool()
     
-    # --- UPDATED: The Plotly & Streamlit Prompt ---
+    # --- UPDATED: The new Session State Hook rule ---
     custom_prefix = """You are an expert Visual Data Analyst.
     1. For data questions, write SQL to find the answer.
     2. If the user asks for a chart, you must use the python_repl_ast tool.
     3. THE PLOTLY RULE: You must use plotly.express to draw charts. NEVER use matplotlib.
-    4. THE STREAMLIT RULE: To show the chart to the user, you MUST import streamlit inside the python tool and call st.plotly_chart().
+    4. THE STREAMLIT RULE: To show the chart to the user, you MUST save the figure to Streamlit's session state under the exact key 'current_fig'.
     5. THE HARDCODE RULE: The Python environment DOES NOT have access to the SQL tool's output variables. You MUST hardcode the data arrays explicitly.
     
     Example of correct Python code:
@@ -63,7 +66,9 @@ def get_visual_agent():
     df = pd.DataFrame({{'Show': shows, 'Hours': hours}})
     
     fig = px.bar(df, x='Hours', y='Show', orientation='h', title='Top Shows')
-    st.plotly_chart(fig, use_container_width=True)
+    
+    # THIS IS HOW YOU PASS THE CHART BACK TO THE USER:
+    st.session_state['current_fig'] = fig
     
     6. Always return a plain-English explanation of the final chart."""
 
@@ -133,12 +138,15 @@ with st.sidebar:
 # --- 5. Instantiate Agent ---
 agent = get_visual_agent()
 
-# --- 6. Chat History ---
+# --- 6. Chat History (UPDATED to load saved charts) ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
+        # If this specific message has a saved chart, draw it first!
+        if "chart" in message and message["chart"] is not None:
+            st.plotly_chart(message["chart"], use_container_width=True)
         st.markdown(message["content"])
 
 # --- 7. Input & Execution ---
@@ -151,6 +159,10 @@ if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product c
         container = st.container()
         with st.spinner("Analyzing database and drawing chart..."):
             try:
+                # Clear out any old charts from the hook before we start thinking
+                if 'current_fig' in st.session_state:
+                    del st.session_state['current_fig']
+                
                 chat_history = ""
                 if len(st.session_state.messages) > 1:
                     chat_history = "Context from recent conversation:\n"
@@ -160,7 +172,6 @@ if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product c
                 
                 contextual_prompt = f"{chat_history}\n\nNew Request: {prompt}"
 
-                # UPDATED: Removed the matplotlib fig logic. The agent handles it now!
                 response = agent.invoke({"input": contextual_prompt})
                 
                 raw_output = response.get('output', '')
@@ -177,8 +188,21 @@ if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product c
                     
                 final_text = final_text.strip()
                 
+                # --- NEW: Retrieve the chart the AI just built from the hook ---
+                generated_chart = st.session_state.get('current_fig', None)
+                
+                # Draw it immediately
+                if generated_chart:
+                    st.plotly_chart(generated_chart, use_container_width=True)
+                
                 st.markdown(final_text)
-                st.session_state.messages.append({"role": "assistant", "content": final_text})
+                
+                # --- NEW: Save the text AND the chart together in memory ---
+                st.session_state.messages.append({
+                    "role": "assistant", 
+                    "content": final_text,
+                    "chart": generated_chart
+                })
                 
             except Exception as e:
                 st.error(f"Error: {e}")
