@@ -18,73 +18,66 @@ st.title("📈 Visual Data Worker By Rana Debnath")
 st.markdown("I can now query your data **and** draw charts.")
 
 # --- 2. Sidebar: Enterprise Data Ingestion ---
-# MOVED OUTSIDE THE CACHED FUNCTION TO FIX WARNING
 db_host = st.secrets["DATABRICKS_HOST"]
 db_path = st.secrets["DATABRICKS_HTTP_PATH"]
 db_token = st.secrets["DATABRICKS_TOKEN"]
-
-# Build the Databricks URI
 databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=data_agent_app&schema=data_agent"
 
 with st.sidebar:
     st.header("📂 Enterprise Data Ingestion")
     
-    # Allow both CSV and Excel uploads
     uploaded_file = st.file_uploader("Upload Data (CSV or Excel)", type=["csv", "xlsx"])
     
-    # 🛑 SAFETY GUARD: Stop here if no file is uploaded yet
     if uploaded_file is not None:
-        # Create a connection engine to your Databricks
-        engine = create_engine(databricks_uri)
-        
-        # --- NEW: The Bulletproof Custom Insert Method ---
-        def databricks_insert(table, conn, keys, data_iter):
-            """Bypasses Databricks parameter bugs by forcing raw SQL strings"""
-            values = []
-            for row in data_iter: # Loop through each row in the chunk
-                formatted_row = []
-                for val in row:   # Loop through each cell in the row
-                    if pd.isna(val):
-                        formatted_row.append("NULL")
-                    else:
-                        # Wrap everything in quotes and escape single quotes safely
-                        val_str = str(val).replace("'", "''")
-                        formatted_row.append(f"'{val_str}'")
-                values.append(f"({', '.join(formatted_row)})")
+        # --- NEW: Check if we ALREADY uploaded this exact file ---
+        if st.session_state.get("last_uploaded_file") != uploaded_file.name:
             
-            # Build and execute the raw SQL string
-            sql = f"INSERT INTO {table.name} ({', '.join(keys)}) VALUES {', '.join(values)}"
-            conn.execute(text(sql))
-        # ------------------------------------------------
-
-        with st.spinner("Processing and uploading to Databricks..."):
+            engine = create_engine(databricks_uri)
             
-            # --- EXCEL HANDLING ---
-            if uploaded_file.name.endswith('.xlsx'):
-                excel_data = pd.read_excel(uploaded_file, sheet_name=None)
-                st.info(f"Found {len(excel_data)} sheets. Uploading...")
+            # ... The Bulletproof Custom Insert Method ...
+            def databricks_insert(table, conn, keys, data_iter):
+                values = []
+                for row in data_iter: 
+                    formatted_row = []
+                    for val in row:   
+                        if pd.isna(val):
+                            formatted_row.append("NULL")
+                        else:
+                            val_str = str(val).replace("'", "''")
+                            formatted_row.append(f"'{val_str}'")
+                    values.append(f"({', '.join(formatted_row)})")
                 
-                for sheet_name, df in excel_data.items():
-                    clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())
+                sql = f"INSERT INTO {table.name} ({', '.join(keys)}) VALUES {', '.join(values)}"
+                conn.execute(text(sql))
+            # ------------------------------------------------
+
+            with st.spinner("Processing and uploading to Databricks..."):
+                if uploaded_file.name.endswith('.xlsx'):
+                    excel_data = pd.read_excel(uploaded_file, sheet_name=None)
+                    for sheet_name, df in excel_data.items():
+                        clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())
+                        df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
+                        df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
+                        st.success(f"✅ Sheet '{sheet_name}' saved as table `{clean_name}`")
+                
+                elif uploaded_file.name.endswith('.csv'):
+                    df = pd.read_csv(uploaded_file)
+                    raw_name = uploaded_file.name.rsplit('.', 1)[0]
+                    clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower())
                     df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
-                    
-                    # UPDATED: chunksize is now 2000 for speed
                     df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
-                    st.success(f"✅ Sheet '{sheet_name}' saved as table `{clean_name}`")
+                    st.success(f"✅ File saved as table `{clean_name}`")
+
+            # --- NEW: Mark this file as 'done' so it doesn't loop ---
+            st.session_state["last_uploaded_file"] = uploaded_file.name
             
-            # --- CSV HANDLING ---
-            elif uploaded_file.name.endswith('.csv'):
-                df = pd.read_csv(uploaded_file)
-                raw_name = uploaded_file.name.rsplit('.', 1)[0]
-                clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower())
-                df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
-                
-                # UPDATED: chunksize is now 2000 for speed
-                df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
-                st.success(f"✅ File saved as table `{clean_name}`")
-
-        st.caption("Upload complete. You can now chat with this data.")
-
+            # --- NEW: Wipe the Agent's memory so it scans for the new tables! ---
+            get_visual_agent.clear()
+            st.caption("Upload complete. The AI Agent has been updated with your new data!")
+            
+        else:
+            # If the file is still in the uploader but already processed, just show a nice message
+            st.success(f"✅ `{uploaded_file.name}` is loaded and ready for questions.")
 # --- 3. Initialize Agent ---
 @st.cache_resource
 def get_visual_agent():
