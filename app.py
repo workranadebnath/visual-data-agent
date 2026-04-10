@@ -43,7 +43,7 @@ def get_visual_agent():
     )
     
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash", 
+        model="gemini-1.5-flash-latest",
         temperature=0,
         safety_settings={
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
