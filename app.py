@@ -49,7 +49,7 @@ with st.sidebar:
                     clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())
                     
                     # Push directly into Databricks!
-                    df.to_sql(clean_name, con=engine, if_exists="replace", index=False)
+                    df.to_sql(clean_name, con=engine, if_exists="replace", index=False, method='multi', chunksize=100)
                     st.success(f"✅ Sheet '{sheet_name}' saved as table `{clean_name}`")
             
             # --- CSV HANDLING ---
@@ -60,7 +60,7 @@ with st.sidebar:
                 raw_name = uploaded_file.name.rsplit('.', 1)[0]
                 clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower())
                 
-                df.to_sql(clean_name, con=engine, if_exists="replace", index=False)
+                df.to_sql(clean_name, con=engine, if_exists="replace", index=False, method='multi', chunksize=100)
                 st.success(f"✅ File saved as table `{clean_name}`")
 
         st.caption("Upload complete. You can now chat with this data.")
