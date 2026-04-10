@@ -9,7 +9,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlo
 from langchain_experimental.tools import PythonAstREPLTool
 
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text # Add 'text' here
 import re
 
 # --- 1. UI Setup ---
@@ -37,10 +37,30 @@ with st.sidebar:
         # Create a connection engine to your Databricks
         engine = create_engine(databricks_uri)
         
+        # --- NEW: The Bulletproof Custom Insert Method ---
+        def databricks_insert(table, conn, keys, data_iter):
+            """Bypasses Databricks parameter bugs by forcing raw SQL strings"""
+            for data in data_iter:
+                values = []
+                for row in data:
+                    formatted_row = []
+                    for val in row:
+                        if pd.isna(val):
+                            formatted_row.append("NULL")
+                        else:
+                            # Wrap everything in quotes and escape single quotes safely
+                            val_str = str(val).replace("'", "''")
+                            formatted_row.append(f"'{val_str}'")
+                    values.append(f"({', '.join(formatted_row)})")
+                
+                # Build and execute the raw SQL string
+                sql = f"INSERT INTO {table.name} ({', '.join(keys)}) VALUES {', '.join(values)}"
+                conn.execute(text(sql))
+        # ------------------------------------------------
+
         with st.spinner("Processing and uploading to Databricks..."):
             
             # --- EXCEL HANDLING ---
-            # 👇 Notice how this is indented to be INSIDE the safety guard
             if uploaded_file.name.endswith('.xlsx'):
                 excel_data = pd.read_excel(uploaded_file, sheet_name=None)
                 st.info(f"Found {len(excel_data)} sheets. Uploading...")
@@ -48,7 +68,9 @@ with st.sidebar:
                 for sheet_name, df in excel_data.items():
                     clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())
                     df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
-                    df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=100)
+                    
+                    # Note the new method=databricks_insert argument!
+                    df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=100, method=databricks_insert)
                     st.success(f"✅ Sheet '{sheet_name}' saved as table `{clean_name}`")
             
             # --- CSV HANDLING ---
@@ -57,7 +79,9 @@ with st.sidebar:
                 raw_name = uploaded_file.name.rsplit('.', 1)[0]
                 clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower())
                 df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
-                df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=100)
+                
+                # Note the new method=databricks_insert argument!
+                df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=100, method=databricks_insert)
                 st.success(f"✅ File saved as table `{clean_name}`")
 
         st.caption("Upload complete. You can now chat with this data.")
