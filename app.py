@@ -32,37 +32,35 @@ with st.sidebar:
     # Allow both CSV and Excel uploads
     uploaded_file = st.file_uploader("Upload Data (CSV or Excel)", type=["csv", "xlsx"])
     
-    # --- EXCEL HANDLING ---
-    if uploaded_file.name.endswith('.xlsx'):
+    # 🛑 SAFETY GUARD: Stop here if no file is uploaded yet
+    if uploaded_file is not None:
+        # Create a connection engine to your Databricks
+        engine = create_engine(databricks_uri)
+        
+        with st.spinner("Processing and uploading to Databricks..."):
+            
+            # --- EXCEL HANDLING ---
+            # 👇 Notice how this is indented to be INSIDE the safety guard
+            if uploaded_file.name.endswith('.xlsx'):
                 excel_data = pd.read_excel(uploaded_file, sheet_name=None)
                 st.info(f"Found {len(excel_data)} sheets. Uploading...")
                 
                 for sheet_name, df in excel_data.items():
-                    # 1. Clean the table name
                     clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())
-                    
-                    # 2. NEW: Clean the column names! (Databricks hates spaces in headers)
                     df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
-                    
-                    # 3. Upload with chunksize (Remove method='multi')
                     df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=100)
                     st.success(f"✅ Sheet '{sheet_name}' saved as table `{clean_name}`")
             
             # --- CSV HANDLING ---
-    elif uploaded_file.name.endswith('.csv'):
+            elif uploaded_file.name.endswith('.csv'):
                 df = pd.read_csv(uploaded_file)
-                
-                # 1. Clean the table name
                 raw_name = uploaded_file.name.rsplit('.', 1)[0]
                 clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower())
-                
-                # 2. NEW: Clean the column names!
                 df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
-                
-                # 3. Upload with chunksize (Remove method='multi')
                 df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=100)
                 st.success(f"✅ File saved as table `{clean_name}`")
 
+        st.caption("Upload complete. You can now chat with this data.")
 
 # --- 3. Initialize Agent ---
 @st.cache_resource
