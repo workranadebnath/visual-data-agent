@@ -1,10 +1,10 @@
 streamlit
-pandas
+pandas==2.1.4
 sqlalchemy
 matplotlib
-langchain>=0.2.0
-langchain-community>=0.2.0
-langchain-google-genai>=1.0.6
+langchain
+langchain-community
+langchain-google-genai
 langchain-experimental
 databricks-sql-connector
 databricks-sqlalchemy

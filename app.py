@@ -21,7 +21,10 @@ st.markdown("I can now query your data **and** draw charts.")
 db_host = st.secrets["DATABRICKS_HOST"]
 db_path = st.secrets["DATABRICKS_HTTP_PATH"]
 db_token = st.secrets["DATABRICKS_TOKEN"]
-databricks_uri = f"databricks+connector://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=data_agent_app&schema=data_agent"
+
+# FIXED: Removed '+connector' from the URI
+databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=data_agent_app&schema=data_agent"
+
 # --- 3. Initialize Agent Function (MOVED TO THE TOP) ---
 @st.cache_resource
 def get_visual_agent():
