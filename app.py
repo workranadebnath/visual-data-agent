@@ -77,54 +77,66 @@ def get_visual_agent():
 with st.sidebar:
     st.header("📂 Enterprise Data Ingestion")
     
-    uploaded_file = st.file_uploader("Upload Data (CSV or Excel)", type=["csv", "xlsx"])
+    # --- NEW: Initialize a dynamic key for the file uploader ---
+    if "uploader_key" not in st.session_state:
+        st.session_state["uploader_key"] = 0
+    
+    # Pass the dynamic key to the uploader
+    uploaded_file = st.file_uploader(
+        "Upload Data (CSV or Excel)", 
+        type=["csv", "xlsx"], 
+        key=f"uploader_{st.session_state['uploader_key']}"
+    )
     
     if uploaded_file is not None:
-        if st.session_state.get("last_uploaded_file") != uploaded_file.name:
+        engine = create_engine(databricks_uri)
+        
+        def databricks_insert(table, conn, keys, data_iter):
+            values = []
+            for row in data_iter: 
+                formatted_row = []
+                for val in row:   
+                    if pd.isna(val):
+                        formatted_row.append("NULL")
+                    else:
+                        val_str = str(val).replace("'", "''")
+                        formatted_row.append(f"'{val_str}'")
+                values.append(f"({', '.join(formatted_row)})")
             
-            engine = create_engine(databricks_uri)
-            
-            def databricks_insert(table, conn, keys, data_iter):
-                values = []
-                for row in data_iter: 
-                    formatted_row = []
-                    for val in row:   
-                        if pd.isna(val):
-                            formatted_row.append("NULL")
-                        else:
-                            val_str = str(val).replace("'", "''")
-                            formatted_row.append(f"'{val_str}'")
-                    values.append(f"({', '.join(formatted_row)})")
-                
-                sql = f"INSERT INTO {table.name} ({', '.join(keys)}) VALUES {', '.join(values)}"
-                conn.execute(text(sql))
+            sql = f"INSERT INTO {table.name} ({', '.join(keys)}) VALUES {', '.join(values)}"
+            conn.execute(text(sql))
 
-            with st.spinner("Processing and uploading to Databricks..."):
-                if uploaded_file.name.endswith('.xlsx'):
-                    excel_data = pd.read_excel(uploaded_file, sheet_name=None)
-                    for sheet_name, df in excel_data.items():
-                        clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())
-                        df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
-                        df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
-                        st.success(f"✅ Sheet '{sheet_name}' saved as table `{clean_name}`")
-                
-                elif uploaded_file.name.endswith('.csv'):
-                    df = pd.read_csv(uploaded_file)
-                    raw_name = uploaded_file.name.rsplit('.', 1)[0]
-                    clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower())
+        with st.spinner(f"Uploading '{uploaded_file.name}' to Databricks..."):
+            if uploaded_file.name.endswith('.xlsx'):
+                excel_data = pd.read_excel(uploaded_file, sheet_name=None)
+                for sheet_name, df in excel_data.items():
+                    clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())
                     df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
                     df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
-                    st.success(f"✅ File saved as table `{clean_name}`")
-
-            st.session_state["last_uploaded_file"] = uploaded_file.name
             
-            # This will now work perfectly because the function exists above!
-            get_visual_agent.clear() 
-            st.caption("Upload complete. The AI Agent has been updated with your new data!")
-            
-        else:
-            st.success(f"✅ `{uploaded_file.name}` is loaded and ready for questions.")
+            elif uploaded_file.name.endswith('.csv'):
+                df = pd.read_csv(uploaded_file)
+                raw_name = uploaded_file.name.rsplit('.', 1)[0]
+                clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower())
+                df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
+                df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
 
+        # 1. Save the file name to show a success message later
+        st.session_state["last_uploaded_file"] = uploaded_file.name
+        
+        # 2. Clear the AI Agent's memory so it sees the new data
+        get_visual_agent.clear() 
+        
+        # 3. Change the uploader key so the box instantly empties itself
+        st.session_state["uploader_key"] += 1
+        
+        # 4. Force Streamlit to immediately refresh the UI
+        st.rerun()
+
+    # --- NEW: Show a persistent success message if a file was uploaded ---
+    if "last_uploaded_file" in st.session_state:
+        st.success(f"✅ `{st.session_state['last_uploaded_file']}` successfully loaded to Databricks!")
+        
 # --- 5. Instantiate Agent ---
 agent = get_visual_agent()
 
