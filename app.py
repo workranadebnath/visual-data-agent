@@ -1,11 +1,18 @@
 import os
 import streamlit as st
+import tempfile
+
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
-from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlockThreshold
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings, HarmCategory, HarmBlockThreshold
 from langchain_experimental.tools import PythonAstREPLTool
 
-# --- NEW: We import the raw LangGraph components instead of the broken helper ---
+# --- NEW: RAG Imports ---
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain.tools.retriever import create_retriever_tool
+
 from langgraph.graph import StateGraph, END, START
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
@@ -17,9 +24,9 @@ from sqlalchemy import create_engine, text
 import re
 
 # --- 1. UI Setup ---
-st.set_page_config(page_title="Visual Data Worker", page_icon="📈")
+st.set_page_config(page_title="Visual Data Worker", page_icon="📈", layout="wide")
 st.title("📈 Visual Data Worker By Rana Debnath")
-st.markdown("I can now query your data, draw charts, and **self-heal my own code.**")
+st.markdown("I can query databases, draw charts, and **read qualitative PDF reports.**")
 
 # --- 2. Credentials ---
 db_host = st.secrets["DATABRICKS_HOST"]
@@ -28,11 +35,10 @@ db_token = st.secrets["DATABRICKS_TOKEN"]
 
 databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=data_agent_app&schema=data_agent"
 
-# --- NEW: Define the Graph's Memory State ---
 class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
 
-# --- 3. Initialize Explicit LangGraph ---
+# --- 3. Initialize Explicit LangGraph with RAG ---
 @st.cache_resource
 def get_visual_agent():
     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
@@ -43,7 +49,7 @@ def get_visual_agent():
     )
     
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model="gemini-2.5-flash", 
         temperature=0,
         safety_settings={
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
@@ -59,52 +65,55 @@ def get_visual_agent():
     
     all_tools = sql_tools + [python_tool]
     
-    custom_prefix = """You are an expert Visual Data Analyst.
-    1. For data questions, use the SQL tools to find the answer.
-    2. If the user asks for a chart, you must use the python_repl_ast tool.
-    3. THE PLOTLY RULE: You must use plotly.express to draw charts. NEVER use matplotlib.
-    4. THE STREAMLIT RULE: To show the chart to the user, you MUST save the figure to Streamlit's session state under the exact key 'current_fig'.
-    5. THE HARDCODE RULE: The Python environment DOES NOT have access to the SQL tool's output variables. You MUST hardcode the data arrays explicitly.
-    6. THE SELF-HEALING RULE: If your python_repl_ast tool returns an error, read the error, fix your code, and run the tool again until it succeeds!
+    # --- NEW: Inject the Retriever Tool if a PDF was uploaded ---
+    if "vector_store" in st.session_state and st.session_state["vector_store"] is not None:
+        retriever = st.session_state["vector_store"].as_retriever(search_kwargs={"k": 4})
+        retriever_tool = create_retriever_tool(
+            retriever,
+            "search_company_reports",
+            "Searches and returns qualitative information, text, and context from the uploaded PDF reports. Use this when the user asks about strategy, reasons, notes, or text-based documents."
+        )
+        all_tools.append(retriever_tool)
     
-    Example of correct Python code:
+    # --- UPDATED: The Omni-Agent Prompt ---
+    custom_prefix = """You are an elite C-Suite Data Analyst. You have 3 main capabilities:
+    1. SQL DATABASE: Use SQL tools to extract quantitative numbers from Databricks.
+    2. PDF DOCUMENTS: Use the 'search_company_reports' tool to find qualitative context, strategies, or explanations from uploaded PDFs.
+    3. DATA VISUALIZATION: Use the 'python_repl_ast' tool to draw charts.
+    
+    THE PLOTLY RULE: You must use plotly.express to draw charts. NEVER use matplotlib.
+    THE STREAMLIT RULE: To show the chart, you MUST save the figure to Streamlit's session state under the exact key 'current_fig'.
+    THE HARDCODE RULE: The Python environment DOES NOT have access to the SQL tool's output variables. You MUST hardcode the data arrays explicitly.
+    THE SELF-HEALING RULE: If your python tool returns an error, read the error, fix your code, and run it again.
+    
+    Example Python code:
     import plotly.express as px
     import pandas as pd
     import streamlit as st
     
-    shows = ['Stranger Things', 'Bridgerton', 'Ozark']
-    hours = [1580910000, 710050000, 281460000]
+    shows = ['A', 'B', 'C']
+    hours = [10, 20, 30]
     df = pd.DataFrame({{'Show': shows, 'Hours': hours}})
-    
-    fig = px.bar(df, x='Hours', y='Show', orientation='h', title='Top Shows')
+    fig = px.bar(df, x='Hours', y='Show')
     st.session_state['current_fig'] = fig
     
-    7. Always return a plain-English explanation of the final chart."""
+    Always combine context from the PDFs with hard data from the database if the user asks for both!"""
 
-    # --- NEW: Build the State Machine Explicitly ---
-    
-    # 1. Give the AI its tools
     llm_with_tools = llm.bind_tools(all_tools)
     
-    # 2. Define the "Thinking" Node
     def call_model(state: AgentState):
         messages = [SystemMessage(content=custom_prefix)] + list(state["messages"])
         response = llm_with_tools.invoke(messages)
         return {"messages": [response]}
         
-    # 3. Define the "Acting" Node
     tool_node = ToolNode(all_tools)
     
-    # 4. Define the routing logic (The Self-Healing Loop)
     def should_continue(state: AgentState):
         last_message = state["messages"][-1]
-        # If the AI decided to use a tool, route to the tool node
         if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
             return "tools"
-        # Otherwise, the task is finished
         return END
         
-    # 5. Wire the graph together
     workflow = StateGraph(AgentState)
     workflow.add_node("agent", call_model)
     workflow.add_node("tools", tool_node)
@@ -115,22 +124,23 @@ def get_visual_agent():
     
     return workflow.compile()
 
-# --- 4. Sidebar: Enterprise Data Ingestion ---
+# --- 4. Sidebar: Omni-Channel Ingestion ---
 with st.sidebar:
     st.header("📂 Enterprise Data Ingestion")
     
     if "uploader_key" not in st.session_state:
         st.session_state["uploader_key"] = 0
-    
-    uploaded_file = st.file_uploader(
-        "Upload Data (CSV or Excel)", 
+        
+    # --- SQL UPLOADER ---
+    st.subheader("1. Quantitative Data (DB)")
+    uploaded_sql_file = st.file_uploader(
+        "Upload Datasets (CSV/Excel)", 
         type=["csv", "xlsx"], 
-        key=f"uploader_{st.session_state['uploader_key']}"
+        key=f"sql_uploader_{st.session_state['uploader_key']}"
     )
     
-    if uploaded_file is not None:
+    if uploaded_sql_file is not None:
         engine = create_engine(databricks_uri)
-        
         def databricks_insert(table, conn, keys, data_iter):
             values = []
             for row in data_iter: 
@@ -142,33 +152,72 @@ with st.sidebar:
                         val_str = str(val).replace("'", "''")
                         formatted_row.append(f"'{val_str}'")
                 values.append(f"({', '.join(formatted_row)})")
-            
             sql = f"INSERT INTO {table.name} ({', '.join(keys)}) VALUES {', '.join(values)}"
             conn.execute(text(sql))
 
-        with st.spinner(f"Uploading '{uploaded_file.name}' to Databricks..."):
-            if uploaded_file.name.endswith('.xlsx'):
-                excel_data = pd.read_excel(uploaded_file, sheet_name=None)
+        with st.spinner(f"Uploading '{uploaded_sql_file.name}' to Databricks..."):
+            if uploaded_sql_file.name.endswith('.xlsx'):
+                excel_data = pd.read_excel(uploaded_sql_file, sheet_name=None)
                 for sheet_name, df in excel_data.items():
                     clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())
                     df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
                     df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
-            
-            elif uploaded_file.name.endswith('.csv'):
-                df = pd.read_csv(uploaded_file)
-                raw_name = uploaded_file.name.rsplit('.', 1)[0]
+            elif uploaded_sql_file.name.endswith('.csv'):
+                df = pd.read_csv(uploaded_sql_file)
+                raw_name = uploaded_sql_file.name.rsplit('.', 1)[0]
                 clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower())
                 df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
                 df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
 
-        st.session_state["last_uploaded_file"] = uploaded_file.name
+        st.session_state["last_uploaded_sql"] = uploaded_sql_file.name
         get_visual_agent.clear() 
         st.session_state["uploader_key"] += 1
         st.rerun()
 
-    if "last_uploaded_file" in st.session_state:
-        st.success(f"✅ `{st.session_state['last_uploaded_file']}` successfully loaded to Databricks!")
-        
+    if "last_uploaded_sql" in st.session_state:
+        st.success(f"✅ DB: `{st.session_state['last_uploaded_sql']}` loaded!")
+
+    st.divider()
+
+    # --- NEW: PDF VECTOR UPLOADER ---
+    st.subheader("2. Qualitative Data (RAG)")
+    uploaded_pdf_file = st.file_uploader(
+        "Upload Reports (PDF)", 
+        type=["pdf"], 
+        key=f"pdf_uploader_{st.session_state['uploader_key']}"
+    )
+
+    if uploaded_pdf_file is not None:
+        with st.spinner(f"Reading and vectorizing '{uploaded_pdf_file.name}'..."):
+            os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+            
+            # Save PDF temporarily to parse it
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                tmp_file.write(uploaded_pdf_file.getvalue())
+                tmp_file_path = tmp_file.name
+            
+            # Extract and chunk text
+            loader = PyPDFLoader(tmp_file_path)
+            pages = loader.load()
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+            splits = text_splitter.split_documents(pages)
+            
+            # Build FAISS Vector Database using Google Embeddings
+            embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+            vectorstore = FAISS.from_documents(splits, embeddings)
+            
+            # Save to session memory and clear temp file
+            st.session_state["vector_store"] = vectorstore
+            os.remove(tmp_file_path)
+
+        st.session_state["last_uploaded_pdf"] = uploaded_pdf_file.name
+        get_visual_agent.clear() # Clear agent cache so it loads the new tool
+        st.session_state["uploader_key"] += 1
+        st.rerun()
+
+    if "last_uploaded_pdf" in st.session_state:
+        st.success(f"✅ RAG: `{st.session_state['last_uploaded_pdf']}` vectorized!")
+
 # --- 5. Instantiate Agent ---
 agent = get_visual_agent()
 
@@ -183,14 +232,14 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
 
 # --- 7. Input & Execution ---
-if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product category"):
+if prompt := st.chat_input("E.g., Based on the PDF, why did costs rise? Draw a chart of actual vs budget."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
         container = st.container()
-        with st.spinner("Analyzing database, writing code, and self-correcting..."):
+        with st.spinner("Synthesizing data, writing code, and self-correcting..."):
             try:
                 if 'current_fig' in st.session_state:
                     del st.session_state['current_fig']
@@ -202,13 +251,9 @@ if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product c
                 
                 lg_messages.append(("user", prompt))
 
-                # --- Execute the Graph ---
                 response = agent.invoke({"messages": lg_messages})
                 
-                # Extract the raw content from the last message
                 raw_content = response["messages"][-1].content
-                
-                # --- NEW: Robust parser to clean up Gemini's raw dictionary blocks ---
                 final_text = ""
                 if isinstance(raw_content, list):
                     for item in raw_content:
