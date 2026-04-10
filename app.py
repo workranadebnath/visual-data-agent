@@ -209,11 +209,16 @@ with st.sidebar:
                 st.stop()
             
             # Build FAISS Vector Database using Google Embeddings
-            embeddings = GoogleGenerativeAIEmbeddings(
-                model="models/text-embedding-004",
-                google_api_key=st.secrets["GOOGLE_API_KEY"]
-            )
-            vectorstore = FAISS.from_documents(splits, embeddings)
+            try:
+                embeddings = GoogleGenerativeAIEmbeddings(
+                    model="models/text-embedding-004",
+                    google_api_key=st.secrets["GOOGLE_API_KEY"]
+                )
+                vectorstore = FAISS.from_documents(splits, embeddings)
+            except Exception as e:
+                st.error(f"🛑 Google API Rejected the PDF. Exact Reason: {e}")
+                os.remove(tmp_file_path)
+                st.stop()
             
             # Save to session memory and clear temp file
             st.session_state["vector_store"] = vectorstore
