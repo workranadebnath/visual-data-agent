@@ -9,7 +9,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlo
 from langchain_experimental.tools import PythonAstREPLTool
 
 import pandas as pd
-from sqlalchemy import create_engine, text # Add 'text' here
+from sqlalchemy import create_engine, text
 import re
 
 # --- 1. UI Setup ---
@@ -17,81 +17,22 @@ st.set_page_config(page_title="Visual Data Worker", page_icon="📈")
 st.title("📈 Visual Data Worker By Rana Debnath")
 st.markdown("I can now query your data **and** draw charts.")
 
-# --- 2. Sidebar: Enterprise Data Ingestion ---
+# --- 2. Credentials ---
 db_host = st.secrets["DATABRICKS_HOST"]
 db_path = st.secrets["DATABRICKS_HTTP_PATH"]
 db_token = st.secrets["DATABRICKS_TOKEN"]
 databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=data_agent_app&schema=data_agent"
 
-with st.sidebar:
-    st.header("📂 Enterprise Data Ingestion")
-    
-    uploaded_file = st.file_uploader("Upload Data (CSV or Excel)", type=["csv", "xlsx"])
-    
-    if uploaded_file is not None:
-        # --- NEW: Check if we ALREADY uploaded this exact file ---
-        if st.session_state.get("last_uploaded_file") != uploaded_file.name:
-            
-            engine = create_engine(databricks_uri)
-            
-            # ... The Bulletproof Custom Insert Method ...
-            def databricks_insert(table, conn, keys, data_iter):
-                values = []
-                for row in data_iter: 
-                    formatted_row = []
-                    for val in row:   
-                        if pd.isna(val):
-                            formatted_row.append("NULL")
-                        else:
-                            val_str = str(val).replace("'", "''")
-                            formatted_row.append(f"'{val_str}'")
-                    values.append(f"({', '.join(formatted_row)})")
-                
-                sql = f"INSERT INTO {table.name} ({', '.join(keys)}) VALUES {', '.join(values)}"
-                conn.execute(text(sql))
-            # ------------------------------------------------
-
-            with st.spinner("Processing and uploading to Databricks..."):
-                if uploaded_file.name.endswith('.xlsx'):
-                    excel_data = pd.read_excel(uploaded_file, sheet_name=None)
-                    for sheet_name, df in excel_data.items():
-                        clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())
-                        df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
-                        df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
-                        st.success(f"✅ Sheet '{sheet_name}' saved as table `{clean_name}`")
-                
-                elif uploaded_file.name.endswith('.csv'):
-                    df = pd.read_csv(uploaded_file)
-                    raw_name = uploaded_file.name.rsplit('.', 1)[0]
-                    clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower())
-                    df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
-                    df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
-                    st.success(f"✅ File saved as table `{clean_name}`")
-
-            # --- NEW: Mark this file as 'done' so it doesn't loop ---
-            st.session_state["last_uploaded_file"] = uploaded_file.name
-            
-            # --- NEW: Wipe the Agent's memory so it scans for the new tables! ---
-            get_visual_agent.clear()
-            st.caption("Upload complete. The AI Agent has been updated with your new data!")
-            
-        else:
-            # If the file is still in the uploader but already processed, just show a nice message
-            st.success(f"✅ `{uploaded_file.name}` is loaded and ready for questions.")
-# --- 3. Initialize Agent ---
+# --- 3. Initialize Agent Function (MOVED TO THE TOP) ---
 @st.cache_resource
 def get_visual_agent():
-    # Replace with your actual key
     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
 
-    # Connect to Databricks
     db = SQLDatabase.from_uri(
         databricks_uri,
-        sample_rows_in_table_info=0 # Set to 0 to bypass the Databricks LIMIT bug
+        sample_rows_in_table_info=0 
     )
     
-    # We use Gemini 2.5 Flash, but we turn down the default safety filters 
-    # to prevent false positives from blocking our database queries.
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash", 
         temperature=0,
@@ -103,7 +44,6 @@ def get_visual_agent():
         }
     )
     
-    # The Python tool that allows the agent to draw
     python_tool = PythonAstREPLTool()
     
     custom_prefix = """You are an expert Visual Data Analyst.
@@ -130,12 +70,65 @@ def get_visual_agent():
         agent_type="tool-calling", 
         verbose=True, 
         prefix=custom_prefix,
-        extra_tools=[python_tool] # Add the drawing tool here
+        extra_tools=[python_tool]
     )
 
+# --- 4. Sidebar: Enterprise Data Ingestion ---
+with st.sidebar:
+    st.header("📂 Enterprise Data Ingestion")
+    
+    uploaded_file = st.file_uploader("Upload Data (CSV or Excel)", type=["csv", "xlsx"])
+    
+    if uploaded_file is not None:
+        if st.session_state.get("last_uploaded_file") != uploaded_file.name:
+            
+            engine = create_engine(databricks_uri)
+            
+            def databricks_insert(table, conn, keys, data_iter):
+                values = []
+                for row in data_iter: 
+                    formatted_row = []
+                    for val in row:   
+                        if pd.isna(val):
+                            formatted_row.append("NULL")
+                        else:
+                            val_str = str(val).replace("'", "''")
+                            formatted_row.append(f"'{val_str}'")
+                    values.append(f"({', '.join(formatted_row)})")
+                
+                sql = f"INSERT INTO {table.name} ({', '.join(keys)}) VALUES {', '.join(values)}"
+                conn.execute(text(sql))
+
+            with st.spinner("Processing and uploading to Databricks..."):
+                if uploaded_file.name.endswith('.xlsx'):
+                    excel_data = pd.read_excel(uploaded_file, sheet_name=None)
+                    for sheet_name, df in excel_data.items():
+                        clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())
+                        df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
+                        df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
+                        st.success(f"✅ Sheet '{sheet_name}' saved as table `{clean_name}`")
+                
+                elif uploaded_file.name.endswith('.csv'):
+                    df = pd.read_csv(uploaded_file)
+                    raw_name = uploaded_file.name.rsplit('.', 1)[0]
+                    clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower())
+                    df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
+                    df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
+                    st.success(f"✅ File saved as table `{clean_name}`")
+
+            st.session_state["last_uploaded_file"] = uploaded_file.name
+            
+            # This will now work perfectly because the function exists above!
+            get_visual_agent.clear() 
+            st.caption("Upload complete. The AI Agent has been updated with your new data!")
+            
+        else:
+            st.success(f"✅ `{uploaded_file.name}` is loaded and ready for questions.")
+
+# --- 5. Instantiate Agent ---
 agent = get_visual_agent()
 
-# --- 4. Chat History ---
+# --- 6. Chat History ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -143,7 +136,7 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# --- 5. Input & Execution ---
+# --- 7. Input & Execution ---
 if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product category"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -153,31 +146,25 @@ if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product c
         container = st.container()
         with st.spinner("Analyzing database and conversation history..."):
             try:
-                # --- MEMORY LOGIC ---
                 chat_history = ""
                 if len(st.session_state.messages) > 1:
                     chat_history = "Context from recent conversation:\n"
-                    for msg in st.session_state.messages[-5:-1]: # Get previous messages excluding the current prompt
+                    for msg in st.session_state.messages[-5:-1]:
                         role = "User" if msg["role"] == "user" else "Data Worker"
                         chat_history += f"{role}: {msg['content']}\n"
                 
-                # Combine the memory with the user's new question
                 contextual_prompt = f"{chat_history}\n\nNew Request: {prompt}"
 
-                # Pass the combined prompt to the agent
                 response = agent.invoke({"input": contextual_prompt})
                 
-                # Plotting logic
                 fig = plt.gcf()
                 if fig.get_axes():
                     st.pyplot(fig, use_container_width=True)
                     plt.clf() 
                 
-                # --- Bulletproof Output Parser V2 ---
                 raw_output = response.get('output', '')
                 final_text = ""
 
-                # If it's a list, loop through and grab all the text pieces
                 if isinstance(raw_output, list):
                     for item in raw_output:
                         if isinstance(item, dict):
@@ -185,10 +172,8 @@ if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product c
                         elif isinstance(item, str):
                             final_text += item
                 else:
-                    # If it's already just a normal string, use it directly
                     final_text = str(raw_output)
                     
-                # Clean up any leftover weird formatting
                 final_text = final_text.strip()
                 
                 st.markdown(final_text)
