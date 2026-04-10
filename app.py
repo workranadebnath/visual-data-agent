@@ -11,7 +11,7 @@ from langchain_experimental.tools import PythonAstREPLTool
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain.tools.retriever import create_retriever_tool
+from langchain_core.tools import create_retriever_tool
 
 from langgraph.graph import StateGraph, END, START
 from langgraph.graph.message import add_messages
