@@ -60,7 +60,7 @@ def get_visual_agent():
     # You must type out the data arrays explicitly!
     shows = ['Stranger Things', 'Bridgerton', 'Ozark']
     hours = [1580910000, 710050000, 281460000]
-    df = pd.DataFrame({'Show': shows, 'Hours': hours})
+    df = pd.DataFrame({{'Show': shows, 'Hours': hours}})
     
     fig = px.bar(df, x='Hours', y='Show', orientation='h', title='Top Shows')
     st.plotly_chart(fig, use_container_width=True)
