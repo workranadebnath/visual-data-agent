@@ -2,12 +2,11 @@ streamlit
 pandas==2.1.4
 sqlalchemy
 plotly
-langchain>=0.2.14
-langchain-core>=0.2.35
-langchain-community>=0.2.12
-langchain-google-genai>=1.0.8
+langchain
+langchain-core
+langchain-community
+langchain-google-genai
 langchain-experimental
 databricks-sql-connector
-databricks-sqlalchemy
 openpyxl
-langgraph>=0.2.16
+langgraph
