@@ -1,7 +1,7 @@
 streamlit
 pandas==2.1.4
 sqlalchemy
-matplotlib
+plotly
 langchain
 langchain-community
 langchain-google-genai

@@ -1,8 +1,5 @@
 import os
 import streamlit as st
-import matplotlib
-matplotlib.use('Agg') # THIS IS THE FIX FOR CLOUD DEPLOYMENTS
-import matplotlib.pyplot as plt
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits import create_sql_agent
 from langchain_google_genai import ChatGoogleGenerativeAI, HarmCategory, HarmBlockThreshold
@@ -15,17 +12,16 @@ import re
 # --- 1. UI Setup ---
 st.set_page_config(page_title="Visual Data Worker", page_icon="📈")
 st.title("📈 Visual Data Worker By Rana Debnath")
-st.markdown("I can now query your data **and** draw charts.")
+st.markdown("I can now query your data **and** draw interactive charts.")
 
 # --- 2. Credentials ---
 db_host = st.secrets["DATABRICKS_HOST"]
 db_path = st.secrets["DATABRICKS_HTTP_PATH"]
 db_token = st.secrets["DATABRICKS_TOKEN"]
 
-# FIXED: Removed '+connector' from the URI
 databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=data_agent_app&schema=data_agent"
 
-# --- 3. Initialize Agent Function (MOVED TO THE TOP) ---
+# --- 3. Initialize Agent Function ---
 @st.cache_resource
 def get_visual_agent():
     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
@@ -48,23 +44,28 @@ def get_visual_agent():
     
     python_tool = PythonAstREPLTool()
     
+    # --- UPDATED: The Plotly & Streamlit Prompt ---
     custom_prefix = """You are an expert Visual Data Analyst.
     1. For data questions, write SQL to find the answer.
     2. If the user asks for a chart, you must use the python_repl_ast tool.
-    3. THE PYTHON REPL RULE: The Python environment DOES NOT have access to the SQL tool's output variables. You MUST hardcode the data you found from the SQL query directly into your Python code.
+    3. THE PLOTLY RULE: You must use plotly.express to draw charts. NEVER use matplotlib.
+    4. THE STREAMLIT RULE: To show the chart to the user, you MUST import streamlit inside the python tool and call st.plotly_chart().
+    5. THE HARDCODE RULE: The Python environment DOES NOT have access to the SQL tool's output variables. You MUST hardcode the data arrays explicitly.
     
     Example of correct Python code:
-    import matplotlib.pyplot as plt
+    import plotly.express as px
     import pandas as pd
+    import streamlit as st
+    
     # You must type out the data arrays explicitly!
     shows = ['Stranger Things', 'Bridgerton', 'Ozark']
     hours = [1580910000, 710050000, 281460000]
-    df = pd.DataFrame({{'Show': shows, 'Hours': hours}})
-    fig, ax = plt.subplots()
-    ax.barh(df['Show'], df['Hours'])
+    df = pd.DataFrame({'Show': shows, 'Hours': hours})
     
-    4. NEVER call plt.show().
-    5. Always return a plain-English explanation of the final chart."""
+    fig = px.bar(df, x='Hours', y='Show', orientation='h', title='Top Shows')
+    st.plotly_chart(fig, use_container_width=True)
+    
+    6. Always return a plain-English explanation of the final chart."""
 
     return create_sql_agent(
         llm, 
@@ -79,11 +80,9 @@ def get_visual_agent():
 with st.sidebar:
     st.header("📂 Enterprise Data Ingestion")
     
-    # --- NEW: Initialize a dynamic key for the file uploader ---
     if "uploader_key" not in st.session_state:
         st.session_state["uploader_key"] = 0
     
-    # Pass the dynamic key to the uploader
     uploaded_file = st.file_uploader(
         "Upload Data (CSV or Excel)", 
         type=["csv", "xlsx"], 
@@ -123,19 +122,11 @@ with st.sidebar:
                 df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
                 df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
 
-        # 1. Save the file name to show a success message later
         st.session_state["last_uploaded_file"] = uploaded_file.name
-        
-        # 2. Clear the AI Agent's memory so it sees the new data
         get_visual_agent.clear() 
-        
-        # 3. Change the uploader key so the box instantly empties itself
         st.session_state["uploader_key"] += 1
-        
-        # 4. Force Streamlit to immediately refresh the UI
         st.rerun()
 
-    # --- NEW: Show a persistent success message if a file was uploaded ---
     if "last_uploaded_file" in st.session_state:
         st.success(f"✅ `{st.session_state['last_uploaded_file']}` successfully loaded to Databricks!")
         
@@ -158,7 +149,7 @@ if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product c
 
     with st.chat_message("assistant"):
         container = st.container()
-        with st.spinner("Analyzing database and conversation history..."):
+        with st.spinner("Analyzing database and drawing chart..."):
             try:
                 chat_history = ""
                 if len(st.session_state.messages) > 1:
@@ -169,12 +160,8 @@ if prompt := st.chat_input("E.g., Draw a bar chart of total revenue by product c
                 
                 contextual_prompt = f"{chat_history}\n\nNew Request: {prompt}"
 
+                # UPDATED: Removed the matplotlib fig logic. The agent handles it now!
                 response = agent.invoke({"input": contextual_prompt})
-                
-                fig = plt.gcf()
-                if fig.get_axes():
-                    st.pyplot(fig, use_container_width=True)
-                    plt.clf() 
                 
                 raw_output = response.get('output', '')
                 final_text = ""
