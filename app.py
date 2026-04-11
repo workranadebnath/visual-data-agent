@@ -7,7 +7,6 @@ from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings, HarmCategory, HarmBlockThreshold
 from langchain_experimental.tools import PythonAstREPLTool
 
-# --- NEW: RAG Imports ---
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
@@ -39,7 +38,7 @@ databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_pat
 class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
 
-# --- 3. Initialize Explicit LangGraph with RAG ---
+# --- 3. Initialize Explicit LangGraph with Shared Memory ---
 @st.cache_resource
 def get_visual_agent():
     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
@@ -62,11 +61,13 @@ def get_visual_agent():
     
     toolkit = SQLDatabaseToolkit(db=db, llm=llm)
     sql_tools = toolkit.get_tools()
-    python_tool = PythonAstREPLTool()
+    
+    # --- FIX: Create a shared memory dictionary and pass it to the Python Sandbox ---
+    chart_holder = {}
+    python_tool = PythonAstREPLTool(locals={"chart_holder": chart_holder})
     
     all_tools = sql_tools + [python_tool]
     
-    # --- NEW: Inject the Retriever Tool if a PDF was uploaded ---
     if "vector_store" in st.session_state and st.session_state["vector_store"] is not None:
         retriever = st.session_state["vector_store"].as_retriever(search_kwargs={"k": 4})
         retriever_tool = create_retriever_tool(
@@ -76,28 +77,28 @@ def get_visual_agent():
         )
         all_tools.append(retriever_tool)
     
-    # --- UPDATED: The Omni-Agent Prompt (Rule 7 & 8 Added) ---
+    # --- FIX: Update the prompt to tell the AI to use the new shared memory ---
     custom_prefix = """You are an elite C-Suite Data Analyst. You have 3 main capabilities:
     1. SQL DATABASE: Use SQL tools to extract quantitative numbers from Databricks.
     2. PDF DOCUMENTS: Use the 'search_company_reports' tool to find qualitative context, strategies, or explanations from uploaded PDFs.
     3. DATA VISUALIZATION: Use the 'python_repl_ast' tool to draw charts.
     
     THE PLOTLY RULE: You must use plotly.express to draw charts. NEVER use matplotlib.
-    THE STREAMLIT RULE: To show the chart, you MUST save the figure to Streamlit's session state under the exact key 'current_fig'.
+    THE MEMORY RULE: To show the chart to the user, you MUST save the figure to the globally injected `chart_holder` dictionary under the exact key 'current_fig'. Do NOT use st.session_state!
     THE HARDCODE RULE: The Python environment DOES NOT have access to the SQL tool's output variables. You MUST hardcode the data arrays explicitly.
     THE SELF-HEALING RULE: If your python tool returns an error, read the error, fix your code, and run it again.
     7. THE STRICT VISUALIZATION RULE: If the user asks for ANY kind of chart, graph, or plot (like a pie chart, bar chart, etc.), you MUST use the python_repl_ast tool to generate it. You are strictly forbidden from saying "Here is the chart" unless you have explicitly executed the Python code to create it!    
     8. THE VOICE RULE: You must ALWAYS provide a plain-English explanation of your findings. Even if you draw a chart, or even if your code fails, you must output a text response telling the user exactly what you did or what went wrong. Never return a blank response!
+    
     Example Python code:
     import plotly.express as px
     import pandas as pd
-    import streamlit as st
     
     shows = ['A', 'B', 'C']
     hours = [10, 20, 30]
-    df = pd.DataFrame({{'Show': shows, 'Hours': hours}})
+    df = pd.DataFrame({'Show': shows, 'Hours': hours})
     fig = px.bar(df, x='Hours', y='Show')
-    st.session_state['current_fig'] = fig
+    chart_holder['current_fig'] = fig
     
     Always combine context from the PDFs with hard data from the database if the user asks for both!"""
 
@@ -124,7 +125,8 @@ def get_visual_agent():
     workflow.add_conditional_edges("agent", should_continue)
     workflow.add_edge("tools", "agent")
     
-    return workflow.compile()
+    # Return both the compiled agent AND the shared memory dictionary
+    return workflow.compile(), chart_holder
 
 # --- 4. Sidebar: Omni-Channel Ingestion ---
 with st.sidebar:
@@ -133,7 +135,6 @@ with st.sidebar:
     if "uploader_key" not in st.session_state:
         st.session_state["uploader_key"] = 0
         
-    # --- SQL UPLOADER ---
     st.subheader("1. Quantitative Data (DB)")
     uploaded_sql_file = st.file_uploader(
         "Upload Datasets (CSV/Excel)", 
@@ -181,7 +182,6 @@ with st.sidebar:
 
     st.divider()
 
-    # --- NEW: PDF VECTOR UPLOADER ---
     st.subheader("2. Qualitative Data (RAG)")
     uploaded_pdf_file = st.file_uploader(
         "Upload Reports (PDF)", 
@@ -193,24 +193,20 @@ with st.sidebar:
         with st.spinner(f"Reading and vectorizing '{uploaded_pdf_file.name}'..."):
             os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
             
-            # Save PDF temporarily to parse it
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
                 tmp_file.write(uploaded_pdf_file.getvalue())
                 tmp_file_path = tmp_file.name
             
-            # Extract and chunk text
             loader = PyPDFLoader(tmp_file_path)
             pages = loader.load()
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
             splits = text_splitter.split_documents(pages)
             
-            # --- NEW: Safety net for empty or scanned PDFs ---
             if not splits:
                 st.error("⚠️ Could not extract any text from this PDF. Please ensure it is a text-based PDF (where you can highlight words) and not a scanned image.")
                 os.remove(tmp_file_path)
                 st.stop()
             
-            # Build FAISS Vector Database using Local HuggingFace Embeddings
             try:
                 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
                 vectorstore = FAISS.from_documents(splits, embeddings)
@@ -219,12 +215,11 @@ with st.sidebar:
                 os.remove(tmp_file_path)
                 st.stop()
             
-            # Save to session memory and clear temp file
             st.session_state["vector_store"] = vectorstore
             os.remove(tmp_file_path)
 
         st.session_state["last_uploaded_pdf"] = uploaded_pdf_file.name
-        get_visual_agent.clear() # Clear agent cache so it loads the new tool
+        get_visual_agent.clear() 
         st.session_state["uploader_key"] += 1
         st.rerun()
 
@@ -232,7 +227,8 @@ with st.sidebar:
         st.success(f"✅ RAG: `{st.session_state['last_uploaded_pdf']}` vectorized!")
 
 # --- 5. Instantiate Agent ---
-agent = get_visual_agent()
+# FIX: Catch the newly returned chart_holder dictionary
+agent, chart_holder = get_visual_agent()
 
 # --- 6. Chat History ---
 if "messages" not in st.session_state:
@@ -254,8 +250,8 @@ if prompt := st.chat_input("E.g., Based on the PDF, why did costs rise? Draw a c
         container = st.container()
         with st.spinner("Synthesizing data, writing code, and self-correcting..."):
             try:
-                if 'current_fig' in st.session_state:
-                    del st.session_state['current_fig']
+                # FIX: Clear the shared memory instead of session state
+                chart_holder.clear()
                 
                 lg_messages = []
                 if len(st.session_state.messages) > 1:
@@ -277,37 +273,32 @@ if prompt := st.chat_input("E.g., Based on the PDF, why did costs rise? Draw a c
                 else:
                     final_text = str(raw_content)
                 
-                generated_chart = st.session_state.get('current_fig', None)
+                # FIX: Extract the chart directly from the shared memory dictionary
+                generated_chart = chart_holder.get('current_fig', None)
                 
-                # --- NEW: Fallback if the AI gives the "Silent Treatment" ---
                 if not final_text.strip():
                     if generated_chart:
-                        final_text = "I successfully generated the chart, but I don't have any additional text to add."
+                        final_text = "I successfully generated the chart based on the data."
                     else:
                         final_text = "⚠️ The agent hit a dead end and returned no text. Check the thought process below to see where it failed."
                 
-                # --- Render Chart & Text ---
                 if generated_chart:
                     st.plotly_chart(generated_chart, use_container_width=True)
                 
                 st.markdown(final_text)
                 
-                # --- NEW: Enterprise Traceability (The AI Brain Scanner) ---
                 with st.expander("🔍 View Agent's Internal Thought Process"):
                     for i, msg in enumerate(response["messages"]):
-                        # Skip the massive system prompt at index 0
                         if getattr(msg, 'type', '') == 'system' or i == 0: 
                             continue 
                         
                         st.markdown(f"**Step {i} ({getattr(msg, 'type', 'unknown')})**:")
                         
-                        # Print the tool it decided to use
                         if hasattr(msg, 'tool_calls') and msg.tool_calls:
                             st.write("🔧 **Triggered Tools:**")
                             for tool in msg.tool_calls:
                                 st.code(f"{tool['name']}: {tool['args']}")
                         
-                        # Print the raw text or code
                         if msg.content:
                             if "```" in str(msg.content):
                                 st.markdown(msg.content)
@@ -316,7 +307,6 @@ if prompt := st.chat_input("E.g., Based on the PDF, why did costs rise? Draw a c
                         
                         st.divider()
                 
-                # --- Save to history ---
                 st.session_state.messages.append({
                     "role": "assistant", 
                     "content": final_text,
