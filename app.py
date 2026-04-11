@@ -86,8 +86,7 @@ def get_visual_agent():
     THE STREAMLIT RULE: To show the chart, you MUST save the figure to Streamlit's session state under the exact key 'current_fig'.
     THE HARDCODE RULE: The Python environment DOES NOT have access to the SQL tool's output variables. You MUST hardcode the data arrays explicitly.
     THE SELF-HEALING RULE: If your python tool returns an error, read the error, fix your code, and run it again.
-    7. THE MULTI-STEP RULE: If the user asks for a summary AND a chart, you MUST execute the python_repl_ast tool to physically draw the chart. Never type "Here is the chart" without actually running the Python code!
-    
+7. THE STRICT VISUALIZATION RULE: If the user asks for ANY kind of chart, graph, or plot (like a pie chart, bar chart, etc.), you MUST use the python_repl_ast tool to generate it. You are strictly forbidden from saying "Here is the chart" unless you have explicitly executed the Python code to create it!    
     Example Python code:
     import plotly.express as px
     import pandas as pd
