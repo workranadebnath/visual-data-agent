@@ -28,6 +28,40 @@ st.set_page_config(page_title="Visual Data Worker", page_icon="📈", layout="wi
 st.title("📈 Visual Data Worker By Rana Debnath")
 st.markdown("I can query databases, draw charts, and **read qualitative PDF reports.**")
 
+# --- 1.5 Enterprise UI Styling ---
+st.markdown("""
+<style>
+    /* Hide Streamlit Default Branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    
+    /* Make the Sidebar look distinct */
+    [data-testid="stSidebar"] {
+        background-color: #0E1117;
+        border-right: 1px solid #333;
+    }
+    
+    /* Style the Chat Input Box */
+    [data-testid="stChatInput"] {
+        border: 1px solid #4CAF50 !important;
+        border-radius: 10px !important;
+    }
+    
+    /* Give user messages a subtle highlight */
+    [data-testid="stChatMessage"]:nth-child(odd) {
+        background-color: rgba(76, 175, 80, 0.1);
+        border-left: 3px solid #4CAF50;
+    }
+    
+    /* Clean up the expander boxes */
+    .streamlit-expanderHeader {
+        font-weight: bold;
+        color: #4CAF50;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # --- 2. Credentials ---
 db_host = st.secrets["DATABRICKS_HOST"]
 db_path = st.secrets["DATABRICKS_HTTP_PATH"]
