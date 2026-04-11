@@ -1,6 +1,8 @@
 import os
 import streamlit as st
 import tempfile
+import json
+from PIL import Image
 
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
@@ -96,7 +98,6 @@ def get_visual_agent():
     toolkit = SQLDatabaseToolkit(db=db, llm=llm)
     sql_tools = toolkit.get_tools()
     
-    # --- FIX: Create a shared memory dictionary and pass it to the Python Sandbox ---
     chart_holder = {}
     python_tool = PythonAstREPLTool(locals={"chart_holder": chart_holder})
     
@@ -111,7 +112,6 @@ def get_visual_agent():
         )
         all_tools.append(retriever_tool)
     
-    # --- FIX: Update the prompt to tell the AI to use the new shared memory ---
     custom_prefix = """You are an elite C-Suite Data Analyst. You have 3 main capabilities:
     1. SQL DATABASE: Use SQL tools to extract quantitative numbers from Databricks.
     2. PDF DOCUMENTS: Use the 'search_company_reports' tool to find qualitative context, strategies, or explanations from uploaded PDFs.
@@ -159,8 +159,22 @@ def get_visual_agent():
     workflow.add_conditional_edges("agent", should_continue)
     workflow.add_edge("tools", "agent")
     
-    # Return both the compiled agent AND the shared memory dictionary
     return workflow.compile(), chart_holder
+
+# --- Helper Function for DB Inserts ---
+def databricks_insert(table, conn, keys, data_iter):
+    values = []
+    for row in data_iter: 
+        formatted_row = []
+        for val in row:   
+            if pd.isna(val):
+                formatted_row.append("NULL")
+            else:
+                val_str = str(val).replace("'", "''")
+                formatted_row.append(f"'{val_str}'")
+        values.append(f"({', '.join(formatted_row)})")
+    sql = f"INSERT INTO {table.name} ({', '.join(keys)}) VALUES {', '.join(values)}"
+    conn.execute(text(sql))
 
 # --- 4. Sidebar: Omni-Channel Ingestion ---
 with st.sidebar:
@@ -178,20 +192,6 @@ with st.sidebar:
     
     if uploaded_sql_file is not None:
         engine = create_engine(databricks_uri)
-        def databricks_insert(table, conn, keys, data_iter):
-            values = []
-            for row in data_iter: 
-                formatted_row = []
-                for val in row:   
-                    if pd.isna(val):
-                        formatted_row.append("NULL")
-                    else:
-                        val_str = str(val).replace("'", "''")
-                        formatted_row.append(f"'{val_str}'")
-                values.append(f"({', '.join(formatted_row)})")
-            sql = f"INSERT INTO {table.name} ({', '.join(keys)}) VALUES {', '.join(values)}"
-            conn.execute(text(sql))
-
         with st.spinner(f"Uploading '{uploaded_sql_file.name}' to Databricks..."):
             if uploaded_sql_file.name.endswith('.xlsx'):
                 excel_data = pd.read_excel(uploaded_sql_file, sheet_name=None)
@@ -260,8 +260,64 @@ with st.sidebar:
     if "last_uploaded_pdf" in st.session_state:
         st.success(f"✅ RAG: `{st.session_state['last_uploaded_pdf']}` vectorized!")
 
+    st.divider()
+
+    # --- NEW: MULTIMODAL VISION INGESTION ---
+    st.subheader("3. Image Extraction (Vision to DB)")
+    uploaded_img_file = st.file_uploader(
+        "Upload Receipts/Charts (PNG/JPG)", 
+        type=["png", "jpg", "jpeg"], 
+        key=f"img_uploader_{st.session_state['uploader_key']}"
+    )
+
+    if uploaded_img_file is not None:
+        try:
+            with st.spinner(f"Extracting data from image '{uploaded_img_file.name}'..."):
+                img = Image.open(uploaded_img_file)
+                st.image(img, caption="Uploaded Image", use_container_width=True)
+                
+                vision_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+                
+                vision_prompt = """
+                Analyze this image carefully. If it is a receipt, invoice, or chart, extract the tabular data.
+                You MUST return ONLY a raw, valid JSON array of objects. Do not use markdown blocks like ```json.
+                Make sure the keys are clean, lowercase strings (e.g., 'item_name', 'price', 'date').
+                If you cannot find tabular data, return an empty array [].
+                """
+                
+                response = vision_llm.invoke([
+                    {"role": "user", "content": [
+                        {"type": "text", "text": vision_prompt},
+                        {"type": "image_url", "image_url": {"url": img}}
+                    ]}
+                ])
+                
+                raw_text = response.content.strip().strip('```json').strip('```')
+                extracted_data = json.loads(raw_text)
+                
+                if not extracted_data:
+                    st.warning("⚠️ No tabular data was found in this image.")
+                else:
+                    df = pd.DataFrame(extracted_data)
+                    df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
+                    
+                    raw_name = uploaded_img_file.name.rsplit('.', 1)[0]
+                    clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower()) + "_img"
+                    
+                    engine = create_engine(databricks_uri)
+                    df.to_sql(clean_name, con=engine, if_exists="replace", index=False, method=databricks_insert)
+                    
+                    st.success(f"✅ Vision: `{clean_name}` table created in Databricks!")
+                    
+                    get_visual_agent.clear() 
+                    st.session_state["uploader_key"] += 1
+
+        except json.JSONDecodeError:
+            st.error("🛑 Vision Error: The AI could not format the image data into a clean table.")
+        except Exception as e:
+            st.error(f"🛑 File Error: Could not process this image. It may be corrupted. (Details: {e})")
+
 # --- 5. Instantiate Agent ---
-# FIX: Catch the newly returned chart_holder dictionary
 agent, chart_holder = get_visual_agent()
 
 # --- 6. Chat History ---
@@ -284,7 +340,6 @@ if prompt := st.chat_input("E.g., Based on the PDF, why did costs rise? Draw a c
         container = st.container()
         with st.spinner("Synthesizing data, writing code, and self-correcting..."):
             try:
-                # FIX: Clear the shared memory instead of session state
                 chart_holder.clear()
                 
                 lg_messages = []
@@ -307,7 +362,6 @@ if prompt := st.chat_input("E.g., Based on the PDF, why did costs rise? Draw a c
                 else:
                     final_text = str(raw_content)
                 
-                # FIX: Extract the chart directly from the shared memory dictionary
                 generated_chart = chart_holder.get('current_fig', None)
                 
                 if not final_text.strip():
