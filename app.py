@@ -76,7 +76,7 @@ def get_visual_agent():
         )
         all_tools.append(retriever_tool)
     
-    # --- UPDATED: The Omni-Agent Prompt (Rule 7 Added) ---
+    # --- UPDATED: The Omni-Agent Prompt (Rule 7 & 8 Added) ---
     custom_prefix = """You are an elite C-Suite Data Analyst. You have 3 main capabilities:
     1. SQL DATABASE: Use SQL tools to extract quantitative numbers from Databricks.
     2. PDF DOCUMENTS: Use the 'search_company_reports' tool to find qualitative context, strategies, or explanations from uploaded PDFs.
@@ -279,11 +279,44 @@ if prompt := st.chat_input("E.g., Based on the PDF, why did costs rise? Draw a c
                 
                 generated_chart = st.session_state.get('current_fig', None)
                 
+                # --- NEW: Fallback if the AI gives the "Silent Treatment" ---
+                if not final_text.strip():
+                    if generated_chart:
+                        final_text = "I successfully generated the chart, but I don't have any additional text to add."
+                    else:
+                        final_text = "⚠️ The agent hit a dead end and returned no text. Check the thought process below to see where it failed."
+                
+                # --- Render Chart & Text ---
                 if generated_chart:
                     st.plotly_chart(generated_chart, use_container_width=True)
                 
                 st.markdown(final_text)
                 
+                # --- NEW: Enterprise Traceability (The AI Brain Scanner) ---
+                with st.expander("🔍 View Agent's Internal Thought Process"):
+                    for i, msg in enumerate(response["messages"]):
+                        # Skip the massive system prompt at index 0
+                        if getattr(msg, 'type', '') == 'system' or i == 0: 
+                            continue 
+                        
+                        st.markdown(f"**Step {i} ({getattr(msg, 'type', 'unknown')})**:")
+                        
+                        # Print the tool it decided to use
+                        if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                            st.write("🔧 **Triggered Tools:**")
+                            for tool in msg.tool_calls:
+                                st.code(f"{tool['name']}: {tool['args']}")
+                        
+                        # Print the raw text or code
+                        if msg.content:
+                            if "```" in str(msg.content):
+                                st.markdown(msg.content)
+                            else:
+                                st.code(str(msg.content)[:1000] + ("..." if len(str(msg.content)) > 1000 else ""))
+                        
+                        st.divider()
+                
+                # --- Save to history ---
                 st.session_state.messages.append({
                     "role": "assistant", 
                     "content": final_text,
