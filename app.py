@@ -183,7 +183,7 @@ for msg in st.session_state.messages:
         if msg.get("chart"): st.plotly_chart(msg["chart"], use_container_width=True)
         st.markdown(msg["content"])
 
-# --- 7. Execution Loop with Clean HITL UI ---
+# --- 7. Execution Loop with "Closed-Loop" Feedback ---
 if prompt := st.chat_input("E.g., Draw a chart of IMDb ratings, filter out nulls."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"): 
@@ -196,51 +196,64 @@ if prompt := st.chat_input("E.g., Draw a chart of IMDb ratings, filter out nulls
             # Invoke agent with persistent thread memory
             result = agent.invoke({"messages": [("user", prompt)]}, config=config)
             
-            # --- STEP 1: CLEAN TEXT EXTRACTION ---
-            # This strips away the 'extras', 'signatures', and JSON brackets
+            # 1. Clean Text Extraction
             raw_content = result["messages"][-1].content
             final_text = ""
             if isinstance(raw_content, list):
                 for item in raw_content:
-                    if isinstance(item, dict):
-                        final_text += item.get('text', '')
-                    else:
-                        final_text += str(item)
+                    if isinstance(item, dict): final_text += item.get('text', '')
+                    else: final_text += str(item)
             else:
                 final_text = str(raw_content)
 
-            # --- STEP 2: HITL SECURITY GATE UI ---
+            # 2. Security Gate UI
             if "SECURITY_CONFIRMATION_REQUIRED" in final_text:
                 st.warning("🚨 **Sensitive Action Detected!**")
                 
-                # Clean the "trigger" word out so the user doesn't see it
-                clean_display_text = final_text.replace("SECURITY_CONFIRMATION_REQUIRED", "").strip()
-                st.markdown(f"**The agent is requesting permission for the following action:**\n\n{clean_display_text}")
+                # Strip the code-word for a clean UI
+                display_msg = final_text.replace("SECURITY_CONFIRMATION_REQUIRED", "").strip()
+                st.markdown(f"**Action Requested:**\n{display_msg}")
                 
                 col1, col2 = st.columns(2)
+                
                 if col1.button("✅ Approve & Run"):
-                    st.success("Authorization granted. Processing...")
-                    # In a production app, you would resume the LangGraph thread here
+                    try:
+                        # --- NEW: ACTUAL EXECUTION LOGIC ---
+                        # We extract the SQL between the backticks ```sql ... ```
+                        sql_match = re.search(r"```sql\n(.*?)\n```", final_text, re.DOTALL)
+                        if sql_match:
+                            query_to_run = sql_match.group(1)
+                            engine = create_engine(databricks_uri)
+                            with engine.connect() as conn:
+                                conn.execute(text(query_to_run))
+                            
+                            # The professional confirmation message you requested
+                            st.balloons() # Added a little celebration for a successful admin task!
+                            st.success("✅ **Thank you for your confirmation. The SQL command has been executed successfully.**")
+                        else:
+                            st.error("Could not find a valid SQL command to execute.")
+                    except Exception as e:
+                        st.error(f"Execution Error: {e}")
+
                 if col2.button("❌ Reject"):
-                    st.error("Action cancelled by user.")
+                    st.info("Action cancelled. No changes were made to the database.")
                     st.stop()
             
-            # --- STEP 3: RENDER NORMAL RESPONSE ---
+            # 3. Normal Response Rendering
             else:
                 gen_chart = chart_holder.get('current_fig')
                 if gen_chart: 
                     st.plotly_chart(gen_chart, use_container_width=True)
-                
                 st.markdown(final_text)
-            
-            # --- STEP 4: AUDIT TRAIL ---
+
+            # 4. Audit Trail
             with st.expander("🔍 Audit Trail & Thought Process"):
                 for m in result["messages"]:
                     if hasattr(m, 'tool_calls') and m.tool_calls:
                         for tc in m.tool_calls: 
                             st.code(f"Tool: {tc['name']}\nArgs: {tc['args']}")
-            
-            # Save to session history
+
+            # Save to history
             st.session_state.messages.append({
                 "role": "assistant", 
                 "content": final_text, 
