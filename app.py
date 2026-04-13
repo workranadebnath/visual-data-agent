@@ -183,40 +183,66 @@ for msg in st.session_state.messages:
         if msg.get("chart"): st.plotly_chart(msg["chart"], use_container_width=True)
         st.markdown(msg["content"])
 
-# --- 7. Execution Loop with HITL Security Gate ---
+# --- 7. Execution Loop with Clean HITL UI ---
 if prompt := st.chat_input("E.g., Draw a chart of IMDb ratings, filter out nulls."):
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"): st.markdown(prompt)
+    with st.chat_message("user"): 
+        st.markdown(prompt)
 
     with st.chat_message("assistant"):
         with st.spinner("Analyzing & Auditing..."):
             chart_holder.clear()
+            
             # Invoke agent with persistent thread memory
             result = agent.invoke({"messages": [("user", prompt)]}, config=config)
             
-            final_msg = result["messages"][-1]
-            content = final_msg.content
+            # --- STEP 1: CLEAN TEXT EXTRACTION ---
+            # This strips away the 'extras', 'signatures', and JSON brackets
+            raw_content = result["messages"][-1].content
+            final_text = ""
+            if isinstance(raw_content, list):
+                for item in raw_content:
+                    if isinstance(item, dict):
+                        final_text += item.get('text', '')
+                    else:
+                        final_text += str(item)
+            else:
+                final_text = str(raw_content)
 
-            # --- HITL Security Gate Logic ---
-            if "SECURITY_CONFIRMATION_REQUIRED" in str(content):
+            # --- STEP 2: HITL SECURITY GATE UI ---
+            if "SECURITY_CONFIRMATION_REQUIRED" in final_text:
                 st.warning("🚨 **Sensitive Action Detected!**")
-                st.markdown(content)
-                if st.button("Confirm & Proceed"):
-                    st.info("Authorized. Running command...")
-                    # In a real HITL, you'd resume the graph here.
-                if st.button("Cancel"):
-                    st.error("Operation Aborted.")
+                
+                # Clean the "trigger" word out so the user doesn't see it
+                clean_display_text = final_text.replace("SECURITY_CONFIRMATION_REQUIRED", "").strip()
+                st.markdown(f"**The agent is requesting permission for the following action:**\n\n{clean_display_text}")
+                
+                col1, col2 = st.columns(2)
+                if col1.button("✅ Approve & Run"):
+                    st.success("Authorization granted. Processing...")
+                    # In a production app, you would resume the LangGraph thread here
+                if col2.button("❌ Reject"):
+                    st.error("Action cancelled by user.")
                     st.stop()
             
-            # --- Render Response & Charts ---
-            gen_chart = chart_holder.get('current_fig')
-            if gen_chart: st.plotly_chart(gen_chart, use_container_width=True)
+            # --- STEP 3: RENDER NORMAL RESPONSE ---
+            else:
+                gen_chart = chart_holder.get('current_fig')
+                if gen_chart: 
+                    st.plotly_chart(gen_chart, use_container_width=True)
+                
+                st.markdown(final_text)
             
-            st.markdown(content)
-            
+            # --- STEP 4: AUDIT TRAIL ---
             with st.expander("🔍 Audit Trail & Thought Process"):
                 for m in result["messages"]:
                     if hasattr(m, 'tool_calls') and m.tool_calls:
-                        for tc in m.tool_calls: st.code(f"Tool: {tc['name']}\nArgs: {tc['args']}")
+                        for tc in m.tool_calls: 
+                            st.code(f"Tool: {tc['name']}\nArgs: {tc['args']}")
             
-            st.session_state.messages.append({"role": "assistant", "content": content, "chart": gen_chart})
+            # Save to session history
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": final_text, 
+                "chart": chart_holder.get('current_fig')
+            })
