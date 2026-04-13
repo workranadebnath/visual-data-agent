@@ -183,147 +183,156 @@ with st.sidebar:
     if "uploader_key" not in st.session_state:
         st.session_state["uploader_key"] = 0
         
-    st.subheader("1. Quantitative Data (DB)")
-    uploaded_sql_file = st.file_uploader(
-        "Upload Datasets (CSV/Excel)", 
-        type=["csv", "xlsx"], 
-        key=f"sql_uploader_{st.session_state['uploader_key']}"
+    # --- NEW: Dropdown Menu for File Type ---
+    upload_type = st.selectbox(
+        "Select Data Type to Upload:",
+        ["Structured Data (CSV/Excel)", "Qualitative Report (PDF)", "Image / Receipt (PNG/JPG)"]
     )
     
-    if uploaded_sql_file is not None:
-        engine = create_engine(databricks_uri)
-        with st.spinner(f"Uploading '{uploaded_sql_file.name}' to Databricks..."):
-            if uploaded_sql_file.name.endswith('.xlsx'):
-                excel_data = pd.read_excel(uploaded_sql_file, sheet_name=None)
-                for sheet_name, df in excel_data.items():
-                    clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())
+    st.divider()
+
+    # --- Option 1: SQL/CSV/Excel ---
+    if upload_type == "Structured Data (CSV/Excel)":
+        st.subheader("Quantitative Data (DB)")
+        uploaded_sql_file = st.file_uploader(
+            "Upload Datasets (CSV/Excel)", 
+            type=["csv", "xlsx"], 
+            key=f"sql_uploader_{st.session_state['uploader_key']}"
+        )
+        
+        if uploaded_sql_file is not None:
+            engine = create_engine(databricks_uri)
+            with st.spinner(f"Uploading '{uploaded_sql_file.name}' to Databricks..."):
+                if uploaded_sql_file.name.endswith('.xlsx'):
+                    excel_data = pd.read_excel(uploaded_sql_file, sheet_name=None)
+                    for sheet_name, df in excel_data.items():
+                        clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())
+                        df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
+                        df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
+                elif uploaded_sql_file.name.endswith('.csv'):
+                    df = pd.read_csv(uploaded_sql_file)
+                    raw_name = uploaded_sql_file.name.rsplit('.', 1)[0]
+                    clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower())
                     df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
                     df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
-            elif uploaded_sql_file.name.endswith('.csv'):
-                df = pd.read_csv(uploaded_sql_file)
-                raw_name = uploaded_sql_file.name.rsplit('.', 1)[0]
-                clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower())
-                df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
-                df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
 
-        st.session_state["last_uploaded_sql"] = uploaded_sql_file.name
-        get_visual_agent.clear() 
-        st.session_state["uploader_key"] += 1
-        st.rerun()
+            st.session_state["last_uploaded_sql"] = uploaded_sql_file.name
+            get_visual_agent.clear() 
+            st.session_state["uploader_key"] += 1
+            st.rerun()  # Forces uploader to clear
 
-    if "last_uploaded_sql" in st.session_state:
-        st.success(f"✅ DB: `{st.session_state['last_uploaded_sql']}` loaded!")
+    # --- Option 2: PDF RAG ---
+    elif upload_type == "Qualitative Report (PDF)":
+        st.subheader("Qualitative Data (RAG)")
+        uploaded_pdf_file = st.file_uploader(
+            "Upload Reports (PDF)", 
+            type=["pdf"], 
+            key=f"pdf_uploader_{st.session_state['uploader_key']}"
+        )
 
-    st.divider()
-
-    st.subheader("2. Qualitative Data (RAG)")
-    uploaded_pdf_file = st.file_uploader(
-        "Upload Reports (PDF)", 
-        type=["pdf"], 
-        key=f"pdf_uploader_{st.session_state['uploader_key']}"
-    )
-
-    if uploaded_pdf_file is not None:
-        with st.spinner(f"Reading and vectorizing '{uploaded_pdf_file.name}'..."):
-            os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
-            
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                tmp_file.write(uploaded_pdf_file.getvalue())
-                tmp_file_path = tmp_file.name
-            
-            loader = PyPDFLoader(tmp_file_path)
-            pages = loader.load()
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-            splits = text_splitter.split_documents(pages)
-            
-            if not splits:
-                st.error("⚠️ Could not extract any text from this PDF. Please ensure it is a text-based PDF (where you can highlight words) and not a scanned image.")
+        if uploaded_pdf_file is not None:
+            with st.spinner(f"Reading and vectorizing '{uploaded_pdf_file.name}'..."):
+                os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+                
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                    tmp_file.write(uploaded_pdf_file.getvalue())
+                    tmp_file_path = tmp_file.name
+                
+                loader = PyPDFLoader(tmp_file_path)
+                pages = loader.load()
+                text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+                splits = text_splitter.split_documents(pages)
+                
+                if not splits:
+                    st.error("⚠️ Could not extract any text from this PDF. Please ensure it is a text-based PDF (where you can highlight words) and not a scanned image.")
+                    os.remove(tmp_file_path)
+                    st.stop()
+                
+                try:
+                    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+                    vectorstore = FAISS.from_documents(splits, embeddings)
+                except Exception as e:
+                    st.error(f"🛑 Vectorization Failed: {e}")
+                    os.remove(tmp_file_path)
+                    st.stop()
+                
+                st.session_state["vector_store"] = vectorstore
                 os.remove(tmp_file_path)
-                st.stop()
-            
+
+            st.session_state["last_uploaded_pdf"] = uploaded_pdf_file.name
+            get_visual_agent.clear() 
+            st.session_state["uploader_key"] += 1
+            st.rerun()  # Forces uploader to clear
+
+    # --- Option 3: Vision ---
+    elif upload_type == "Image / Receipt (PNG/JPG)":
+        st.subheader("Image Extraction (Vision to DB)")
+        uploaded_img_file = st.file_uploader(
+            "Upload Receipts/Charts (PNG/JPG)", 
+            type=["png", "jpg", "jpeg"], 
+            key=f"img_uploader_{st.session_state['uploader_key']}"
+        )
+
+        if uploaded_img_file is not None:
             try:
-                embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-                vectorstore = FAISS.from_documents(splits, embeddings)
+                with st.spinner(f"Extracting data from image '{uploaded_img_file.name}'..."):
+                    img = Image.open(uploaded_img_file)
+                    st.image(img, caption="Processing Image...", use_container_width=True)
+                    
+                    image_bytes = uploaded_img_file.getvalue()
+                    encoded_image = base64.b64encode(image_bytes).decode('utf-8')
+                    image_data_url = f"data:image/png;base64,{encoded_image}"
+                    
+                    vision_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+                    
+                    vision_prompt = """
+                    Analyze this image carefully. If it is a receipt, invoice, or chart, extract the tabular data.
+                    You MUST return ONLY a raw, valid JSON array of objects. Do not use markdown blocks like ```json.
+                    Make sure the keys are clean, lowercase strings (e.g., 'item_name', 'price', 'date').
+                    If you cannot find tabular data, return an empty array [].
+                    """
+                    
+                    response = vision_llm.invoke([
+                        {"role": "user", "content": [
+                            {"type": "text", "text": vision_prompt},
+                            {"type": "image_url", "image_url": {"url": image_data_url}}
+                        ]}
+                    ])
+                    
+                    raw_text = response.content.strip().strip('```json').strip('```')
+                    extracted_data = json.loads(raw_text)
+                    
+                    if not extracted_data:
+                        st.warning("⚠️ No tabular data was found in this image.")
+                    else:
+                        df = pd.DataFrame(extracted_data)
+                        df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
+                        
+                        raw_name = uploaded_img_file.name.rsplit('.', 1)[0]
+                        clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower()) + "_img"
+                        
+                        engine = create_engine(databricks_uri)
+                        df.to_sql(clean_name, con=engine, if_exists="replace", index=False, method=databricks_insert)
+                        
+                        st.session_state["last_uploaded_img"] = clean_name
+                        get_visual_agent.clear() 
+                        st.session_state["uploader_key"] += 1
+                        st.rerun()  # Forces uploader to clear and reset
+
+            except json.JSONDecodeError:
+                st.error("🛑 Vision Error: The AI could not format the image data into a clean table.")
             except Exception as e:
-                st.error(f"🛑 Vectorization Failed: {e}")
-                os.remove(tmp_file_path)
-                st.stop()
-            
-            st.session_state["vector_store"] = vectorstore
-            os.remove(tmp_file_path)
+                st.error(f"🛑 File Error: Could not process this image. It may be corrupted. (Details: {e})")
 
-        st.session_state["last_uploaded_pdf"] = uploaded_pdf_file.name
-        get_visual_agent.clear() 
-        st.session_state["uploader_key"] += 1
-        st.rerun()
-
-    if "last_uploaded_pdf" in st.session_state:
-        st.success(f"✅ RAG: `{st.session_state['last_uploaded_pdf']}` vectorized!")
-
+    # --- Persistent Memory Display ---
     st.divider()
-
-    # --- NEW: MULTIMODAL VISION INGESTION ---
-    st.subheader("3. Image Extraction (Vision to DB)")
-    uploaded_img_file = st.file_uploader(
-        "Upload Receipts/Charts (PNG/JPG)", 
-        type=["png", "jpg", "jpeg"], 
-        key=f"img_uploader_{st.session_state['uploader_key']}"
-    )
-
-    if uploaded_img_file is not None:
-        try:
-            with st.spinner(f"Extracting data from image '{uploaded_img_file.name}'..."):
-                img = Image.open(uploaded_img_file)
-                st.image(img, caption="Uploaded Image", use_container_width=True)
-                
-                # --- FIXED CODE: Convert image to Base64 String here ---
-                image_bytes = uploaded_img_file.getvalue()
-                encoded_image = base64.b64encode(image_bytes).decode('utf-8')
-                image_data_url = f"data:image/png;base64,{encoded_image}"
-                # --------------------------------------------------------
-                
-                vision_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
-                
-                vision_prompt = """
-                Analyze this image carefully. If it is a receipt, invoice, or chart, extract the tabular data.
-                You MUST return ONLY a raw, valid JSON array of objects. Do not use markdown blocks like ```json.
-                Make sure the keys are clean, lowercase strings (e.g., 'item_name', 'price', 'date').
-                If you cannot find tabular data, return an empty array [].
-                """
-                
-                response = vision_llm.invoke([
-                    {"role": "user", "content": [
-                        {"type": "text", "text": vision_prompt},
-                        # --- FIXED CODE: Send the string URL instead of the PIL object ---
-                        {"type": "image_url", "image_url": {"url": image_data_url}}
-                    ]}
-                ])
-                
-                raw_text = response.content.strip().strip('```json').strip('```')
-                extracted_data = json.loads(raw_text)
-                
-                if not extracted_data:
-                    st.warning("⚠️ No tabular data was found in this image.")
-                else:
-                    df = pd.DataFrame(extracted_data)
-                    df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
-                    
-                    raw_name = uploaded_img_file.name.rsplit('.', 1)[0]
-                    clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', raw_name.lower()) + "_img"
-                    
-                    engine = create_engine(databricks_uri)
-                    df.to_sql(clean_name, con=engine, if_exists="replace", index=False, method=databricks_insert)
-                    
-                    st.success(f"✅ Vision: `{clean_name}` table created in Databricks!")
-                    
-                    get_visual_agent.clear() 
-                    st.session_state["uploader_key"] += 1
-                    st.rerun()
-
-        except json.JSONDecodeError:
-            st.error("🛑 Vision Error: The AI could not format the image data into a clean table.")
-        except Exception as e:
-            st.error(f"🛑 File Error: Could not process this image. It may be corrupted. (Details: {e})")
+    st.markdown("##### 🧠 Active System Memory")
+    if "last_uploaded_sql" in st.session_state:
+        st.success(f"📊 DB: `{st.session_state['last_uploaded_sql']}`")
+    if "last_uploaded_pdf" in st.session_state:
+        st.success(f"📄 RAG: `{st.session_state['last_uploaded_pdf']}`")
+    if "last_uploaded_img" in st.session_state:
+        st.success(f"👁️ Vision: `{st.session_state['last_uploaded_img']}`")
 
 # --- 5. Instantiate Agent ---
 agent, chart_holder = get_visual_agent()
