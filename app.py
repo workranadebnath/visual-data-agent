@@ -198,17 +198,21 @@ if "pending_action" in st.session_state and st.session_state["pending_action"]:
         if col1.button("✅ Approve & Run"):
             try:
                 engine = create_engine(databricks_uri)
-                with engine.connect() as conn:
+                # Use a context manager to ensure the connection is closed and committed
+                with engine.begin() as conn: 
                     conn.execute(text(action['sql']))
                 
-                success_msg = "✅ **Thank you for your confirmation. The SQL command has been executed successfully.**"
-                st.balloons()
-                st.success(success_msg)
+                # --- THE FIX: CLEAR THE CACHE ---
+                get_visual_agent.clear() 
                 
-                # Save to history and CLEAR the pending action
+                success_msg = "✅ **Confirmation received. The table has been permanently deleted, and the agent's memory has been refreshed.**"
+                st.balloons()
+                
+                # Save to history so the AGENT sees this message in the next turn
                 st.session_state.messages.append({"role": "assistant", "content": success_msg})
+                
                 st.session_state["pending_action"] = None
-                st.rerun() # Refresh to clean up the UI
+                st.rerun() 
             except Exception as e:
                 st.error(f"Execution Error: {e}")
                 st.session_state["pending_action"] = None
