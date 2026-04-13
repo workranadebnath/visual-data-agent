@@ -183,7 +183,42 @@ for msg in st.session_state.messages:
         if msg.get("chart"): st.plotly_chart(msg["chart"], use_container_width=True)
         st.markdown(msg["content"])
 
-# --- 7. Execution Loop with Persistent Response Fix ---
+# --- 7. Execution Loop with Persistent Pending Actions ---
+
+# A. ALWAYS CHECK FOR PENDING ACTIONS FIRST (Outside the chat input)
+if "pending_action" in st.session_state and st.session_state["pending_action"]:
+    action = st.session_state["pending_action"]
+    
+    with st.chat_message("assistant"):
+        st.warning("🚨 **Sensitive Action Detected!**")
+        st.markdown(f"**Action Requested:**\n{action['display_msg']}")
+        
+        col1, col2 = st.columns(2)
+        
+        if col1.button("✅ Approve & Run"):
+            try:
+                engine = create_engine(databricks_uri)
+                with engine.connect() as conn:
+                    conn.execute(text(action['sql']))
+                
+                success_msg = "✅ **Thank you for your confirmation. The SQL command has been executed successfully.**"
+                st.balloons()
+                st.success(success_msg)
+                
+                # Save to history and CLEAR the pending action
+                st.session_state.messages.append({"role": "assistant", "content": success_msg})
+                st.session_state["pending_action"] = None
+                st.rerun() # Refresh to clean up the UI
+            except Exception as e:
+                st.error(f"Execution Error: {e}")
+                st.session_state["pending_action"] = None
+
+        if col2.button("❌ Reject"):
+            st.info("Action cancelled.")
+            st.session_state["pending_action"] = None
+            st.rerun()
+
+# B. THE MAIN CHAT INPUT
 if prompt := st.chat_input("E.g., Draw a chart of IMDb ratings, filter out nulls."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"): 
@@ -192,11 +227,9 @@ if prompt := st.chat_input("E.g., Draw a chart of IMDb ratings, filter out nulls
     with st.chat_message("assistant"):
         with st.spinner("Analyzing & Auditing..."):
             chart_holder.clear()
-            
-            # Invoke agent with persistent thread memory
             result = agent.invoke({"messages": [("user", prompt)]}, config=config)
             
-            # 1. Clean Text Extraction (Strips JSON/Metadata)
+            # 1. Clean Text Extraction
             raw_content = result["messages"][-1].content
             final_text = ""
             if isinstance(raw_content, list):
@@ -206,60 +239,35 @@ if prompt := st.chat_input("E.g., Draw a chart of IMDb ratings, filter out nulls
             else:
                 final_text = str(raw_content)
 
-            # 2. Security Gate UI Logic
+            # 2. Check for Security Trigger
             if "SECURITY_CONFIRMATION_REQUIRED" in final_text:
-                st.warning("🚨 **Sensitive Action Detected!**")
+                sql_match = re.search(r"```sql\n(.*?)\n```", final_text, re.DOTALL)
+                clean_msg = final_text.replace("SECURITY_CONFIRMATION_REQUIRED", "").strip()
                 
-                # Hide the code-word and clean the prompt for the user
-                display_msg = final_text.replace("SECURITY_CONFIRMATION_REQUIRED", "").strip()
-                st.markdown(f"**Action Requested:**\n{display_msg}")
-                
-                col1, col2 = st.columns(2)
-                
-                if col1.button("✅ Approve & Run"):
-                    try:
-                        # Find and run the SQL command
-                        sql_match = re.search(r"```sql\n(.*?)\n```", final_text, re.DOTALL)
-                        if sql_match:
-                            query_to_run = sql_match.group(1)
-                            engine = create_engine(databricks_uri)
-                            with engine.connect() as conn:
-                                conn.execute(text(query_to_run))
-                            
-                            success_msg = "✅ **Thank you for your confirmation. The SQL command has been executed successfully.**"
-                            st.balloons()
-                            st.success(success_msg)
-                            
-                            # CRITICAL: Save this success to history so it doesn't vanish
-                            st.session_state.messages.append({
-                                "role": "assistant", 
-                                "content": success_msg
-                            })
-                        else:
-                            st.error("No valid SQL found in the agent's response.")
-                    except Exception as e:
-                        st.error(f"Execution Error: {e}")
-
-                if col2.button("❌ Reject"):
-                    st.info("Action cancelled. No changes were made.")
-                    st.stop()
+                if sql_match:
+                    # Capture the action for the next rerun
+                    st.session_state["pending_action"] = {
+                        "sql": sql_match.group(1),
+                        "display_msg": clean_msg
+                    }
+                    st.rerun() # Trigger the rerun immediately to show the buttons
+                else:
+                    st.error("Sensitive action requested but no SQL found.")
             
-            # 3. Standard Response (If no security warning)
+            # 3. Normal Response Rendering
             else:
                 gen_chart = chart_holder.get('current_fig')
                 if gen_chart: 
                     st.plotly_chart(gen_chart, use_container_width=True)
-                
                 st.markdown(final_text)
-                
-                # Save normal response to history
+
                 st.session_state.messages.append({
                     "role": "assistant", 
                     "content": final_text, 
                     "chart": gen_chart
                 })
 
-            # 4. Audit Trail (Always show what the AI was thinking)
+            # 4. Audit Trail
             with st.expander("🔍 Audit Trail & Thought Process"):
                 for m in result["messages"]:
                     if hasattr(m, 'tool_calls') and m.tool_calls:
