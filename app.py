@@ -5,6 +5,7 @@ import json
 from PIL import Image
 import base64
 import re
+import time
 import pandas as pd
 from sqlalchemy import create_engine, text
 
@@ -56,10 +57,20 @@ class AgentState(TypedDict):
 @st.cache_resource
 def get_visual_agent():
     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
-    db = SQLDatabase.from_uri(databricks_uri, sample_rows_in_table_info=0)
     
+    # Track active tables to prevent schema bloat
+    active_tables = []
+    if "last_sql" in st.session_state: active_tables.append(st.session_state["last_sql"])
+    if "last_img" in st.session_state: active_tables.append(st.session_state["last_img"])
+    
+    if active_tables:
+        db = SQLDatabase.from_uri(databricks_uri, include_tables=active_tables, sample_rows_in_table_info=0)
+    else:
+        db = SQLDatabase.from_uri(databricks_uri, sample_rows_in_table_info=0)
+    
+    # Upgrade to Gemini 3 Flash for larger context limits
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash", 
+        model="gemini-3-flash", 
         temperature=0,
         safety_settings={cat: HarmBlockThreshold.BLOCK_NONE for cat in [
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, HarmCategory.HARM_CATEGORY_HATE_SPEECH,
@@ -75,11 +86,10 @@ def get_visual_agent():
         retriever = st.session_state["vector_store"].as_retriever(search_kwargs={"k": 4})
         all_tools.append(create_retriever_tool(retriever, "search_company_reports", "Search qualitative PDF info."))
     
-    # --- UPDATED PREFIX: Strict Visualization Rules ---
     custom_prefix = """You are a Security-Focused C-Suite Data Analyst.
     1. SECURITY GATE: If you intend to use SQL 'INSERT', 'UPDATE', 'DELETE', or 'DROP', you MUST explicitly state "SECURITY_CONFIRMATION_REQUIRED" and show the query. Do NOT run it yet.
-    2. DATA AUDIT: Before drawing any chart, you MUST check the table schema to find the correct column names. If values are NULL, None, or 0.0, you MUST filter them in Python before plotting.
-    3. VISUALIZATION RULE: You MUST use plotly.express for all charts. You MUST save the final figure object to the shared memory using exactly: `chart_holder['current_fig'] = fig`.
+    2. DATA AUDIT: Before drawing any chart, check the table schema to find the correct column names. Handle NULL or 0.0 values in Python.
+    3. VISUALIZATION RULE: If a user asks for a chart/plot, you MUST execute the python_repl_ast tool. NEVER just describe the chart. Write code to draw it using plotly.express and save the final figure object using exactly: `chart_holder['current_fig'] = fig`.
     4. VOICE: Always explain your steps in plain English. Never return a blank response."""
 
     llm_with_tools = llm.bind_tools(all_tools)
@@ -153,7 +163,7 @@ with st.sidebar:
         if uploaded_file:
             with st.spinner("Vision Processing..."):
                 img_b64 = base64.b64encode(uploaded_file.getvalue()).decode()
-                v_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+                v_llm = ChatGoogleGenerativeAI(model="gemini-3-flash")
                 res = v_llm.invoke([{"role": "user", "content": [{"type": "text", "text": "Extract table as JSON array. Keys: clean_lowercase."}, {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}]}])
                 data = json.loads(res.content.strip('`json\n '))
                 df = pd.DataFrame(data)
@@ -212,7 +222,21 @@ if prompt := st.chat_input("E.g., Draw a pie chart of the top 10 films by rating
     with st.chat_message("assistant"):
         with st.spinner("Analyzing & Auditing..."):
             chart_holder.clear()
-            result = agent.invoke({"messages": [("user", prompt)]}, config=config)
+            
+            # --- Added Retry Logic for 500 Server Errors ---
+            result = None
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    result = agent.invoke({"messages": [("user", prompt)]}, config=config)
+                    break
+                except Exception as e:
+                    if "ServerError" in str(e) and attempt < max_retries - 1:
+                        time.sleep(2)
+                        continue
+                    else:
+                        st.error(f"API Error: {e}")
+                        st.stop()
             
             raw_content = result["messages"][-1].content
             final_text = ""
@@ -231,7 +255,6 @@ if prompt := st.chat_input("E.g., Draw a pie chart of the top 10 films by rating
                     st.rerun()
             
             else:
-                # --- NEW: Enhanced Visualization Rendering ---
                 gen_chart = chart_holder.get('current_fig')
                 if gen_chart: 
                     st.plotly_chart(gen_chart, use_container_width=True)
