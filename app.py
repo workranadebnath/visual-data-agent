@@ -3,7 +3,7 @@ import streamlit as st
 import tempfile
 import json
 from PIL import Image
-
+import base64
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings, HarmCategory, HarmBlockThreshold
@@ -276,6 +276,12 @@ with st.sidebar:
                 img = Image.open(uploaded_img_file)
                 st.image(img, caption="Uploaded Image", use_container_width=True)
                 
+                # --- FIXED CODE: Convert image to Base64 String here ---
+                image_bytes = uploaded_img_file.getvalue()
+                encoded_image = base64.b64encode(image_bytes).decode('utf-8')
+                image_data_url = f"data:image/png;base64,{encoded_image}"
+                # --------------------------------------------------------
+                
                 vision_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
                 
                 vision_prompt = """
@@ -288,7 +294,8 @@ with st.sidebar:
                 response = vision_llm.invoke([
                     {"role": "user", "content": [
                         {"type": "text", "text": vision_prompt},
-                        {"type": "image_url", "image_url": {"url": img}}
+                        # --- FIXED CODE: Send the string URL instead of the PIL object ---
+                        {"type": "image_url", "image_url": {"url": image_data_url}}
                     ]}
                 ])
                 
