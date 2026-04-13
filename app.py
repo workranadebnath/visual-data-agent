@@ -318,6 +318,7 @@ with st.sidebar:
                     
                     get_visual_agent.clear() 
                     st.session_state["uploader_key"] += 1
+                    st.rerun()
 
         except json.JSONDecodeError:
             st.error("🛑 Vision Error: The AI could not format the image data into a clean table.")
