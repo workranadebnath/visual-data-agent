@@ -103,9 +103,19 @@ def get_visual_agent():
 def databricks_insert(table, conn, keys, data_iter):
     values = []
     for row in data_iter: 
-        formatted_row = [f"'{str(val).replace(\"'\", \"''\")}'" if not pd.isna(val) else "NULL" for val in row]
+        formatted_row = []
+        for val in row:
+            if pd.isna(val):
+                formatted_row.append("NULL")
+            else:
+                # We do the replacement outside the f-string to avoid backslash errors
+                clean_val = str(val).replace("'", "''")
+                formatted_row.append(f"'{clean_val}'")
         values.append(f"({', '.join(formatted_row)})")
-    conn.execute(text(f"INSERT INTO {table.name} ({', '.join(keys)}) VALUES {', '.join(values)}"))
+    
+    # Construct and execute the SQL
+    sql_query = f"INSERT INTO {table.name} ({', '.join(keys)}) VALUES {', '.join(values)}"
+    conn.execute(text(sql_query))
 
 # --- 4. Sidebar: Omni-Channel Ingestion ---
 with st.sidebar:
