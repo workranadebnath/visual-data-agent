@@ -183,7 +183,7 @@ for msg in st.session_state.messages:
         if msg.get("chart"): st.plotly_chart(msg["chart"], use_container_width=True)
         st.markdown(msg["content"])
 
-# --- 7. Execution Loop with "Closed-Loop" Feedback ---
+# --- 7. Execution Loop with Persistent Response Fix ---
 if prompt := st.chat_input("E.g., Draw a chart of IMDb ratings, filter out nulls."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"): 
@@ -196,7 +196,7 @@ if prompt := st.chat_input("E.g., Draw a chart of IMDb ratings, filter out nulls
             # Invoke agent with persistent thread memory
             result = agent.invoke({"messages": [("user", prompt)]}, config=config)
             
-            # 1. Clean Text Extraction
+            # 1. Clean Text Extraction (Strips JSON/Metadata)
             raw_content = result["messages"][-1].content
             final_text = ""
             if isinstance(raw_content, list):
@@ -206,11 +206,11 @@ if prompt := st.chat_input("E.g., Draw a chart of IMDb ratings, filter out nulls
             else:
                 final_text = str(raw_content)
 
-            # 2. Security Gate UI
+            # 2. Security Gate UI Logic
             if "SECURITY_CONFIRMATION_REQUIRED" in final_text:
                 st.warning("🚨 **Sensitive Action Detected!**")
                 
-                # Strip the code-word for a clean UI
+                # Hide the code-word and clean the prompt for the user
                 display_msg = final_text.replace("SECURITY_CONFIRMATION_REQUIRED", "").strip()
                 st.markdown(f"**Action Requested:**\n{display_msg}")
                 
@@ -218,8 +218,7 @@ if prompt := st.chat_input("E.g., Draw a chart of IMDb ratings, filter out nulls
                 
                 if col1.button("✅ Approve & Run"):
                     try:
-                        # --- NEW: ACTUAL EXECUTION LOGIC ---
-                        # We extract the SQL between the backticks ```sql ... ```
+                        # Find and run the SQL command
                         sql_match = re.search(r"```sql\n(.*?)\n```", final_text, re.DOTALL)
                         if sql_match:
                             query_to_run = sql_match.group(1)
@@ -227,35 +226,42 @@ if prompt := st.chat_input("E.g., Draw a chart of IMDb ratings, filter out nulls
                             with engine.connect() as conn:
                                 conn.execute(text(query_to_run))
                             
-                            # The professional confirmation message you requested
-                            st.balloons() # Added a little celebration for a successful admin task!
-                            st.success("✅ **Thank you for your confirmation. The SQL command has been executed successfully.**")
+                            success_msg = "✅ **Thank you for your confirmation. The SQL command has been executed successfully.**"
+                            st.balloons()
+                            st.success(success_msg)
+                            
+                            # CRITICAL: Save this success to history so it doesn't vanish
+                            st.session_state.messages.append({
+                                "role": "assistant", 
+                                "content": success_msg
+                            })
                         else:
-                            st.error("Could not find a valid SQL command to execute.")
+                            st.error("No valid SQL found in the agent's response.")
                     except Exception as e:
                         st.error(f"Execution Error: {e}")
 
                 if col2.button("❌ Reject"):
-                    st.info("Action cancelled. No changes were made to the database.")
+                    st.info("Action cancelled. No changes were made.")
                     st.stop()
             
-            # 3. Normal Response Rendering
+            # 3. Standard Response (If no security warning)
             else:
                 gen_chart = chart_holder.get('current_fig')
                 if gen_chart: 
                     st.plotly_chart(gen_chart, use_container_width=True)
+                
                 st.markdown(final_text)
+                
+                # Save normal response to history
+                st.session_state.messages.append({
+                    "role": "assistant", 
+                    "content": final_text, 
+                    "chart": gen_chart
+                })
 
-            # 4. Audit Trail
+            # 4. Audit Trail (Always show what the AI was thinking)
             with st.expander("🔍 Audit Trail & Thought Process"):
                 for m in result["messages"]:
                     if hasattr(m, 'tool_calls') and m.tool_calls:
                         for tc in m.tool_calls: 
                             st.code(f"Tool: {tc['name']}\nArgs: {tc['args']}")
-
-            # Save to history
-            st.session_state.messages.append({
-                "role": "assistant", 
-                "content": final_text, 
-                "chart": chart_holder.get('current_fig')
-            })
