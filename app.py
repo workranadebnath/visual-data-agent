@@ -173,7 +173,7 @@ with st.sidebar:
             st.session_state["uploader_key"] += 1
             get_visual_agent.clear(); st.rerun()
 
-    elif upload_type == "Image / Receipt (PNG/JPG)":
+    elif upload_type == "Image/Receipt":
         uploaded_file = st.file_uploader("Upload Image", type=["png", "jpg"], key=f"img_{st.session_state['uploader_key']}")
         if uploaded_file:
             with st.spinner("Vision Processing..."):
