@@ -85,7 +85,7 @@ def get_visual_agent():
     
     # Upgrade to Gemini 3 Flash for larger context limits
     llm = ChatGoogleGenerativeAI(
-        model="gemini-3-flash", 
+        model="gemini-2.5-flash",  
         temperature=0,
         safety_settings={cat: HarmBlockThreshold.BLOCK_NONE for cat in [
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, HarmCategory.HARM_CATEGORY_HATE_SPEECH,
