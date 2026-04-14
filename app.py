@@ -94,18 +94,41 @@ def get_visual_agent():
     
     toolkit = SQLDatabaseToolkit(db=db, llm=llm)
     chart_holder = {}
-    python_tool = PythonAstREPLTool(locals={"chart_holder": chart_holder})
+    # --- FIX 2: Override the hidden tool description (Made even stronger) ---
+    python_tool = PythonAstREPLTool(
+        locals={"chart_holder": chart_holder},
+        description="CRITICAL: You MUST use this tool to execute Python code whenever a user asks for a chart, plot, or graph. Do NOT skip this step. Input must be valid Python code using pandas and plotly.express."
+    )
     all_tools = toolkit.get_tools() + [python_tool]
     
     if "vector_store" in st.session_state and st.session_state["vector_store"] is not None:
         retriever = st.session_state["vector_store"].as_retriever(search_kwargs={"k": 4})
         all_tools.append(create_retriever_tool(retriever, "search_company_reports", "Search qualitative PDF info."))
     
+    # --- FIX 3: Step-by-Step Prompting with Exact Example ---
     custom_prefix = """You are a Security-Focused C-Suite Data Analyst.
-    1. SECURITY GATE: If you intend to use SQL 'INSERT', 'UPDATE', 'DELETE', or 'DROP', you MUST explicitly state "SECURITY_CONFIRMATION_REQUIRED" and show the query. Do NOT run it yet.
-    2. DATA AUDIT: Before drawing any chart, check the table schema to find the correct column names. Handle NULL or 0.0 values in Python.
-    3. VISUALIZATION RULE: If a user asks for a chart/plot, you MUST execute the python_repl_ast tool. NEVER just describe the chart. Write code to draw it using plotly.express and save the final figure object using exactly: `chart_holder['current_fig'] = fig`.
-    4. VOICE: Always explain your steps in plain English. Never return a blank response."""
+    1. SECURITY GATE: You are STRICTLY FORBIDDEN from running 'INSERT', 'UPDATE', 'DELETE', or 'DROP' directly. Reply ONLY with this exact format:
+    SECURITY_CONFIRMATION_REQUIRED
+    ```sql
+    [query]
+    ```
+    2. DATA AUDIT: Check the schema before charting.
+    3. VISUALIZATION MANDATE (CRITICAL): If the user asks for a chart, you CANNOT just output text. You MUST execute the `python_repl_ast` tool. 
+       Do NOT stop after `sql_db_query`. You must take the SQL results and pass them into the Python tool.
+       
+       EXAMPLE PYTHON SCRIPT YOU MUST RUN IN THE TOOL:
+       ```python
+       import pandas as pd
+       import plotly.express as px
+       
+       # Hardcode the data you got from sql_db_query
+       data = {'show_title': ['Movie A', 'Movie B'], 'hours': [100, 50]} 
+       df = pd.DataFrame(data)
+       
+       fig = px.pie(df, names='show_title', values='hours', title='Top Films')
+       chart_holder['current_fig'] = fig
+       ```
+    4. VOICE: Always explain your steps. NEVER return an empty response."""
 
     llm_with_tools = llm.bind_tools(all_tools)
     
