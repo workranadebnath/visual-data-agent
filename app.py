@@ -63,14 +63,29 @@ def get_visual_agent():
     if "last_sql" in st.session_state: active_tables.append(st.session_state["last_sql"])
     if "last_img" in st.session_state: active_tables.append(st.session_state["last_img"])
     
+    # --- FIX: Connection parameters to prevent Databricks timeouts ---
+    engine_kwargs = {
+        "pool_pre_ping": True,  # Checks if connection is alive before querying
+        "pool_recycle": 1800    # Reconnects automatically every 30 minutes
+    }
+    
     if active_tables:
-        db = SQLDatabase.from_uri(databricks_uri, include_tables=active_tables, sample_rows_in_table_info=0)
+        db = SQLDatabase.from_uri(
+            databricks_uri, 
+            include_tables=active_tables, 
+            sample_rows_in_table_info=0,
+            engine_args=engine_kwargs
+        )
     else:
-        db = SQLDatabase.from_uri(databricks_uri, sample_rows_in_table_info=0)
+        db = SQLDatabase.from_uri(
+            databricks_uri, 
+            sample_rows_in_table_info=0,
+            engine_args=engine_kwargs
+        )
     
     # Upgrade to Gemini 3 Flash for larger context limits
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash", 
+        model="gemini-3-flash", 
         temperature=0,
         safety_settings={cat: HarmBlockThreshold.BLOCK_NONE for cat in [
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, HarmCategory.HARM_CATEGORY_HATE_SPEECH,
