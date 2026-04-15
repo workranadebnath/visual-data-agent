@@ -163,7 +163,10 @@ def databricks_insert(table, conn, keys, data_iter):
                 formatted_row.append(f"'{clean_val}'")
         values.append(f"({', '.join(formatted_row)})")
     
-    sql_query = f"INSERT INTO {table.name} ({', '.join(keys)}) VALUES {', '.join(values)}"
+    # --- FIX: Wrap the table name and all column names in backticks ---
+    escaped_keys = [f"`{k}`" for k in keys]
+    sql_query = f"INSERT INTO `{table.name}` ({', '.join(escaped_keys)}) VALUES {', '.join(values)}"
+    
     conn.execute(text(sql_query))
 
 # --- 4. Sidebar: Omni-Channel Ingestion ---
