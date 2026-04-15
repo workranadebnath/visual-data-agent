@@ -8,7 +8,6 @@ import re
 import time
 import pandas as pd
 from sqlalchemy import create_engine, text
-from datetime import datetime
 
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
@@ -177,19 +176,12 @@ with st.sidebar:
     if upload_type == "CSV/Excel":
         uploaded_file = st.file_uploader("Upload Data", type=["csv", "xlsx"], key=f"sql_{st.session_state['uploader_key']}")
         if uploaded_file:
-            engine = create_engine(databricks_uri, poolclass=NullPool)
+            engine = create_engine(databricks_uri)
             with st.spinner("Uploading..."):
                 df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
-                
-                # --- NEW: Smart Datetime Naming Convention ---
-                timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-                # Clean the filename and grab just the first 15 characters to keep it brief
-                file_brief = re.sub(r'[^a-zA-Z0-9_]', '_', uploaded_file.name.rsplit('.', 1)[0].lower())[:15]
-                clean_name = f"tbl_{timestamp}_{file_brief}"
-                
+                clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', uploaded_file.name.rsplit('.', 1)[0].lower())
                 df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
                 df.to_sql(clean_name, con=engine, if_exists="replace", index=False, method=databricks_insert)
-            
             st.session_state["last_sql"] = clean_name
             st.session_state["uploader_key"] += 1
             get_visual_agent.clear(); st.rerun()
@@ -216,15 +208,8 @@ with st.sidebar:
                 res = v_llm.invoke([{"role": "user", "content": [{"type": "text", "text": "Extract table as JSON array. Keys: clean_lowercase."}, {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}]}])
                 data = json.loads(res.content.strip('`json\n '))
                 df = pd.DataFrame(data)
-                
-                # --- NEW: Smart Datetime Naming Convention ---
-                timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-                file_brief = re.sub(r'[^a-zA-Z0-9_]', '_', uploaded_file.name.rsplit('.', 1)[0].lower())[:15]
-                tbl_name = f"tbl_{timestamp}_{file_brief}_img"
-                
-                engine = create_engine(databricks_uri, poolclass=NullPool)
-                df.to_sql(tbl_name, con=engine, if_exists="replace", index=False, method=databricks_insert)
-            
+                tbl_name = re.sub(r'[^a-zA-Z0-9_]', '_', uploaded_file.name.lower()) + "_img"
+                df.to_sql(tbl_name, con=create_engine(databricks_uri), if_exists="replace", index=False, method=databricks_insert)
             st.session_state["last_img"] = tbl_name
             st.session_state["uploader_key"] += 1
             get_visual_agent.clear(); st.rerun()
