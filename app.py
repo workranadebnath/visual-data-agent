@@ -7,8 +7,9 @@ import base64
 import re
 import time
 import pandas as pd
-from sqlalchemy import create_engine, text
 from datetime import datetime
+from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool  # <-- FIX: Added missing NullPool import
 
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
@@ -66,8 +67,7 @@ def get_visual_agent():
     
     # --- FIX: Connection parameters to prevent Databricks timeouts ---
     engine_kwargs = {
-        "pool_pre_ping": True,  # Checks if connection is alive before querying
-        "pool_recycle": 1800    # Reconnects automatically every 30 minutes
+        "poolclass": NullPool 
     }
     
     if active_tables:
@@ -106,7 +106,6 @@ def get_visual_agent():
         retriever = st.session_state["vector_store"].as_retriever(search_kwargs={"k": 4})
         all_tools.append(create_retriever_tool(retriever, "search_company_reports", "Search qualitative PDF info."))
     
-    # --- FIX 3: Step-by-Step Prompting with Exact Example ---
     # --- FIX 3: Databricks Dialect & Step-by-Step Prompting ---
     custom_prefix = """You are a Security-Focused C-Suite Data Analyst querying a Databricks (Spark SQL) database.
     1. SQL DIALECT: You MUST use Databricks Spark SQL syntax. For example, to format dates, use `date_format(date_column, 'yyyy-MM')`. Never use SQLite strftime.
@@ -184,7 +183,7 @@ with st.sidebar:
             with st.spinner("Uploading..."):
                 df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
                 
-                # --- NEW: Smart Datetime Naming Convention ---
+                # --- Smart Datetime Naming Convention ---
                 timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
                 # Clean the filename and grab just the first 15 characters to keep it brief
                 file_brief = re.sub(r'[^a-zA-Z0-9_]', '_', uploaded_file.name.rsplit('.', 1)[0].lower())[:15]
@@ -218,9 +217,15 @@ with st.sidebar:
                 v_llm = ChatGoogleGenerativeAI(model="gemini-3-flash")
                 res = v_llm.invoke([{"role": "user", "content": [{"type": "text", "text": "Extract table as JSON array. Keys: clean_lowercase."}, {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}]}])
                 data = json.loads(res.content.strip('`json\n '))
-                df = pd.DataFrame(data)
                 
-                # --- NEW: Smart Datetime Naming Convention ---
+                # --- FIX: Bulletproof JSON Parsing ---
+                if isinstance(data, dict):
+                    first_key = list(data.keys())[0]
+                    df = pd.DataFrame(data[first_key])
+                else:
+                    df = pd.DataFrame(data)
+                
+                # --- Smart Datetime Naming Convention ---
                 timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
                 file_brief = re.sub(r'[^a-zA-Z0-9_]', '_', uploaded_file.name.rsplit('.', 1)[0].lower())[:15]
                 tbl_name = f"tbl_{timestamp}_{file_brief}_img"
