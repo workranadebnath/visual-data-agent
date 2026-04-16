@@ -7,7 +7,9 @@ import base64
 import re
 import time
 import pandas as pd
+from datetime import datetime
 from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool
 
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
@@ -63,11 +65,8 @@ def get_visual_agent():
     if "last_sql" in st.session_state: active_tables.append(st.session_state["last_sql"])
     if "last_img" in st.session_state: active_tables.append(st.session_state["last_img"])
     
-    # --- FIX: Connection parameters to prevent Databricks timeouts ---
-    engine_kwargs = {
-        "pool_pre_ping": True,  # Checks if connection is alive before querying
-        "pool_recycle": 1800    # Reconnects automatically every 30 minutes
-    }
+    # NullPool prevents Databricks connection timeouts
+    engine_kwargs = {"poolclass": NullPool}
     
     if active_tables:
         db = SQLDatabase.from_uri(
@@ -83,7 +82,7 @@ def get_visual_agent():
             engine_args=engine_kwargs
         )
     
-    # Upgrade to Gemini 3 Flash for larger context limits
+    # Flagship Gemini Model for reasoning
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",  
         temperature=0,
@@ -94,7 +93,8 @@ def get_visual_agent():
     
     toolkit = SQLDatabaseToolkit(db=db, llm=llm)
     chart_holder = {}
-    # --- FIX 2: Override the hidden tool description (Made even stronger) ---
+    
+    # Python Sandbox Tool for rendering charts
     python_tool = PythonAstREPLTool(
         locals={"chart_holder": chart_holder},
         description="CRITICAL: You MUST use this tool to execute Python code whenever a user asks for a chart, plot, or graph. Do NOT skip this step. Input must be valid Python code using pandas and plotly.express."
@@ -105,32 +105,32 @@ def get_visual_agent():
         retriever = st.session_state["vector_store"].as_retriever(search_kwargs={"k": 4})
         all_tools.append(create_retriever_tool(retriever, "search_company_reports", "Search qualitative PDF info."))
     
-    # --- FIX 3: Step-by-Step Prompting with Exact Example ---
-    # --- FIX 3: Databricks Dialect & Step-by-Step Prompting ---
-    custom_prefix = """You are a Security-Focused C-Suite Data Analyst querying a Databricks (Spark SQL) database.
+    # Enterprise Databricks & Visualization Prompt
+    tick3 = '```'
+    custom_prefix = f"""You are a Security-Focused C-Suite Data Analyst querying a Databricks (Spark SQL) database.
     1. SQL DIALECT: You MUST use Databricks Spark SQL syntax. For example, to format dates, use `date_format(date_column, 'yyyy-MM')`. Never use SQLite strftime.
     2. SECURITY GATE: You are STRICTLY FORBIDDEN from running 'INSERT', 'UPDATE', 'DELETE', or 'DROP' directly. Reply ONLY with this exact format:
     SECURITY_CONFIRMATION_REQUIRED
-    ```sql
+    {tick3}sql
     [query]
-    ```
+    {tick3}
     3. DATA AUDIT: Check the schema before charting.
     4. VISUALIZATION MANDATE (CRITICAL): If the user asks for a chart, you CANNOT just output text. You MUST execute the `python_repl_ast` tool. 
        Do NOT stop after `sql_db_query`. You must take the SQL results and pass them into the Python tool.
        
        EXAMPLE PYTHON SCRIPT YOU MUST RUN IN THE TOOL:
-       ```python
+       {tick3}python
        import pandas as pd
        import plotly.express as px
        
        # Hardcode the data you got from sql_db_query
-       data = {'month': ['2023-01', '2023-02'], 'total_amount': [100, 50]} 
+       data = {{'month': ['2023-01', '2023-02'], 'total_amount': [100, 50]}} 
        df = pd.DataFrame(data)
        
        # Draw the requested chart (line, pie, bar, etc.)
        fig = px.line(df, x='month', y='total_amount', title='Monthly Trend')
        chart_holder['current_fig'] = fig
-       ```
+       {tick3}
     5. VOICE: Always explain your steps. NEVER return an empty response."""
 
     llm_with_tools = llm.bind_tools(all_tools)
@@ -162,7 +162,10 @@ def databricks_insert(table, conn, keys, data_iter):
                 formatted_row.append(f"'{clean_val}'")
         values.append(f"({', '.join(formatted_row)})")
     
-    sql_query = f"INSERT INTO {table.name} ({', '.join(keys)}) VALUES {', '.join(values)}"
+    # Bulletproof syntax for Databricks dynamic naming
+    escaped_keys = [f"`{k}`" for k in keys]
+    sql_query = f"INSERT INTO `{table.name}` ({', '.join(escaped_keys)}) VALUES {', '.join(values)}"
+    
     conn.execute(text(sql_query))
 
 # --- 4. Sidebar: Omni-Channel Ingestion ---
@@ -176,12 +179,18 @@ with st.sidebar:
     if upload_type == "CSV/Excel":
         uploaded_file = st.file_uploader("Upload Data", type=["csv", "xlsx"], key=f"sql_{st.session_state['uploader_key']}")
         if uploaded_file:
-            engine = create_engine(databricks_uri)
+            engine = create_engine(databricks_uri, poolclass=NullPool)
             with st.spinner("Uploading..."):
                 df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
-                clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', uploaded_file.name.rsplit('.', 1)[0].lower())
+                
+                # Smart Datetime Naming Convention
+                timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+                file_brief = re.sub(r'[^a-zA-Z0-9_]', '_', uploaded_file.name.rsplit('.', 1)[0].lower())[:15]
+                clean_name = f"tbl_{timestamp}_{file_brief}"
+                
                 df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
                 df.to_sql(clean_name, con=engine, if_exists="replace", index=False, method=databricks_insert)
+            
             st.session_state["last_sql"] = clean_name
             st.session_state["uploader_key"] += 1
             get_visual_agent.clear(); st.rerun()
@@ -207,9 +216,22 @@ with st.sidebar:
                 v_llm = ChatGoogleGenerativeAI(model="gemini-3-flash")
                 res = v_llm.invoke([{"role": "user", "content": [{"type": "text", "text": "Extract table as JSON array. Keys: clean_lowercase."}, {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}]}])
                 data = json.loads(res.content.strip('`json\n '))
-                df = pd.DataFrame(data)
-                tbl_name = re.sub(r'[^a-zA-Z0-9_]', '_', uploaded_file.name.lower()) + "_img"
-                df.to_sql(tbl_name, con=create_engine(databricks_uri), if_exists="replace", index=False, method=databricks_insert)
+                
+                # Bulletproof JSON Parsing
+                if isinstance(data, dict):
+                    first_key = list(data.keys())[0]
+                    df = pd.DataFrame(data[first_key])
+                else:
+                    df = pd.DataFrame(data)
+                
+                # Smart Datetime Naming Convention
+                timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+                file_brief = re.sub(r'[^a-zA-Z0-9_]', '_', uploaded_file.name.rsplit('.', 1)[0].lower())[:15]
+                tbl_name = f"tbl_{timestamp}_{file_brief}_img"
+                
+                engine = create_engine(databricks_uri, poolclass=NullPool)
+                df.to_sql(tbl_name, con=engine, if_exists="replace", index=False, method=databricks_insert)
+            
             st.session_state["last_img"] = tbl_name
             st.session_state["uploader_key"] += 1
             get_visual_agent.clear(); st.rerun()
@@ -232,7 +254,6 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
 
 # --- 7. Execution Loop ---
-
 if "pending_action" in st.session_state and st.session_state["pending_action"]:
     action = st.session_state["pending_action"]
     with st.chat_message("assistant"):
@@ -241,11 +262,11 @@ if "pending_action" in st.session_state and st.session_state["pending_action"]:
         col1, col2 = st.columns(2)
         if col1.button("✅ Approve & Run"):
             try:
-                engine = create_engine(databricks_uri)
+                engine = create_engine(databricks_uri, poolclass=NullPool)
                 with engine.begin() as conn: 
                     conn.execute(text(action['sql']))
                 get_visual_agent.clear() 
-                success_msg = "✅ **Confirmation received. The table has been permanently deleted, and memory refreshed.**"
+                success_msg = "✅ **Confirmation received. Action executed, and memory refreshed.**"
                 st.balloons(); st.success(success_msg)
                 st.session_state.messages.append({"role": "assistant", "content": success_msg})
                 st.session_state["pending_action"] = None
@@ -264,7 +285,6 @@ if prompt := st.chat_input("E.g., Draw a pie chart of the top 10 films by rating
         with st.spinner("Analyzing & Auditing..."):
             chart_holder.clear()
             
-            # --- Added Retry Logic for 500 Server Errors ---
             result = None
             max_retries = 3
             for attempt in range(max_retries):
@@ -272,7 +292,7 @@ if prompt := st.chat_input("E.g., Draw a pie chart of the top 10 films by rating
                     result = agent.invoke({"messages": [("user", prompt)]}, config=config)
                     break
                 except Exception as e:
-                    if "ServerError" in str(e) and attempt < max_retries - 1:
+                    if ("ServerError" in str(e) or "500" in str(e)) and attempt < max_retries - 1:
                         time.sleep(2)
                         continue
                     else:
@@ -288,12 +308,21 @@ if prompt := st.chat_input("E.g., Draw a pie chart of the top 10 films by rating
             else:
                 final_text = str(raw_content)
 
+            # Bulletproof Security Gate Regex and Sync
             if "SECURITY_CONFIRMATION_REQUIRED" in final_text:
-                sql_match = re.search(r"```sql\n(.*?)\n```", final_text, re.DOTALL)
+                tick3 = '```'
+                pattern = tick3 + r"(?:sql)?\n?(.*?)\n?" + tick3
+                sql_match = re.search(pattern, final_text, re.DOTALL | re.IGNORECASE)
+                
                 clean_msg = final_text.replace("SECURITY_CONFIRMATION_REQUIRED", "").strip()
                 if sql_match:
                     st.session_state["pending_action"] = {"sql": sql_match.group(1), "display_msg": clean_msg}
+                    st.session_state.messages.append({"role": "assistant", "content": clean_msg})
                     st.rerun()
+                else:
+                    err_msg = "🚨 **Sensitive Action Detected!** The AI requested an action but forgot to format the SQL command in a code block."
+                    st.error(err_msg)
+                    st.session_state.messages.append({"role": "assistant", "content": err_msg})
             
             else:
                 gen_chart = chart_holder.get('current_fig')
@@ -302,14 +331,12 @@ if prompt := st.chat_input("E.g., Draw a pie chart of the top 10 films by rating
                 elif any(word in prompt.lower() for word in ["plot", "chart", "graph", "pie"]):
                     st.info("💡 **Analyst Note:** I processed the data, but I encountered an issue generating the visual object. Please check the 'Audit Trail' to see if there was a column name mismatch.")
                 
-                if final_text.strip():
-                    st.markdown(final_text)
-                else:
-                    st.markdown("I have completed the analysis based on your request.")
+                display_text = final_text.strip() if final_text.strip() else "Analysis complete."
+                st.markdown(display_text)
 
                 st.session_state.messages.append({
                     "role": "assistant", 
-                    "content": final_text if final_text.strip() else "Task completed.", 
+                    "content": display_text, 
                     "chart": gen_chart
                 })
 
