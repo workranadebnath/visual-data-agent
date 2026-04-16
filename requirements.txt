@@ -15,3 +15,4 @@ langgraph
 pypdf
 faiss-cpu
 sentence-transformers
+pillow
