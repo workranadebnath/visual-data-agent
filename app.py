@@ -241,7 +241,7 @@ with st.sidebar:
                     for sheet_name, df in excel_data.items():
                         timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
                         file_brief = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())[:15]
-                        clean_name = f"Table_{timestamp}_{file_brief}"
+                        clean_name = f"table_{timestamp}_{file_brief}"
                         df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
                         df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
                         st.session_state["last_uploaded_sql"] = clean_name
@@ -249,7 +249,7 @@ with st.sidebar:
                     df = pd.read_csv(uploaded_sql_file)
                     timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
                     file_brief = re.sub(r'[^a-zA-Z0-9_]', '_', uploaded_sql_file.name.rsplit('.', 1)[0].lower())[:15]
-                    clean_name = f"Table_{timestamp}_{file_brief}"
+                    clean_name = f"table_{timestamp}_{file_brief}"
                     df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
                     df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
                     st.session_state["last_uploaded_sql"] = clean_name
@@ -353,7 +353,7 @@ with st.sidebar:
                         
                         timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
                         file_brief = re.sub(r'[^a-zA-Z0-9_]', '_', uploaded_img_file.name.rsplit('.', 1)[0].lower())[:15]
-                        clean_name = f"Table_{timestamp}_{file_brief}_img"
+                        clean_name = f"table_{timestamp}_{file_brief}_img"
                         
                         engine = create_engine(databricks_uri, poolclass=NullPool)
                         df.to_sql(clean_name, con=engine, if_exists="replace", index=False, method=databricks_insert)
