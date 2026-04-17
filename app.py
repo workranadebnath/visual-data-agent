@@ -477,7 +477,6 @@ if prompt := st.chat_input("E.g., Based on the PDF, why did costs rise? Draw a c
                 
                 else:
                     generated_chart = chart_holder.get('current_fig', None) 
-                    mlm
                     if not final_text.strip():
                         if generated_chart:
                             final_text = "I successfully generated the chart based on the data."
