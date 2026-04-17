@@ -84,8 +84,12 @@ def get_visual_agent():
 
     # Track active tables to prevent schema bloat
     active_tables = []
-    if "last_uploaded_sql" in st.session_state: active_tables.append(st.session_state["last_uploaded_sql"])
-    if "last_uploaded_img" in st.session_state: active_tables.append(st.session_state["last_uploaded_img"])
+    # --- FIX 1: Change to active_sql_tables list ---
+    if "active_sql_tables" in st.session_state: 
+        active_tables.extend(st.session_state["active_sql_tables"])
+    
+    if "last_uploaded_img" in st.session_state: 
+        active_tables.append(st.session_state["last_uploaded_img"])
 
     engine_kwargs = {"poolclass": NullPool}
 
@@ -227,6 +231,11 @@ with st.sidebar:
     # --- Option 1: SQL/CSV/Excel ---
     if upload_type == "Structured Data (CSV/Excel)":
         st.subheader("Quantitative Data (DB)")
+        
+        # --- FIX 2: Initialize the memory list if it doesn't exist ---
+        if "active_sql_tables" not in st.session_state:
+            st.session_state["active_sql_tables"] = []
+            
         uploaded_sql_file = st.file_uploader(
             "Upload Datasets (CSV/Excel)", 
             type=["csv", "xlsx"], 
@@ -241,18 +250,23 @@ with st.sidebar:
                     for sheet_name, df in excel_data.items():
                         timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
                         file_brief = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())[:15]
-                        clean_name = f"table_{timestamp}_{file_brief}"
+                        clean_name = f"tbl_{timestamp}_{file_brief}"
                         df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
                         df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
-                        st.session_state["last_uploaded_sql"] = clean_name
+                        
+                        # --- FIX 2b: Append to list instead of overwrite ---
+                        st.session_state["active_sql_tables"].append(clean_name)
+                        
                 elif uploaded_sql_file.name.endswith('.csv'):
                     df = pd.read_csv(uploaded_sql_file)
                     timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
                     file_brief = re.sub(r'[^a-zA-Z0-9_]', '_', uploaded_sql_file.name.rsplit('.', 1)[0].lower())[:15]
-                    clean_name = f"table_{timestamp}_{file_brief}"
+                    clean_name = f"tbl_{timestamp}_{file_brief}"
                     df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
                     df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
-                    st.session_state["last_uploaded_sql"] = clean_name
+                    
+                    # --- FIX 2c: Append to list instead of overwrite ---
+                    st.session_state["active_sql_tables"].append(clean_name)
 
             get_visual_agent.clear() 
             st.session_state["uploader_key"] += 1
@@ -371,8 +385,12 @@ with st.sidebar:
     # --- Persistent Memory Display ---
     st.divider()
     st.markdown("##### 🧠 Active System Memory")
-    if "last_uploaded_sql" in st.session_state:
-        st.success(f"📊 DB: `{st.session_state['last_uploaded_sql']}`")
+    
+    # --- FIX 3: Loop through the list to display all tables ---
+    if "active_sql_tables" in st.session_state and st.session_state["active_sql_tables"]:
+        for tbl in st.session_state["active_sql_tables"]:
+            st.success(f"📊 DB: `{tbl}`")
+            
     if "last_uploaded_pdf" in st.session_state:
         st.success(f"📄 RAG: `{st.session_state['last_uploaded_pdf']}`")
     if "last_uploaded_img" in st.session_state:
