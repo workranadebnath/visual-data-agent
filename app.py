@@ -30,7 +30,7 @@ from langchain_core.messages import BaseMessage, SystemMessage
 
 # --- 1. UI Setup ---
 st.set_page_config(page_title="Visual Data Worker", page_icon="📈", layout="wide")
-st.title("📈 Visual Data Worker By Rana Debnath")
+st.title("📈 Visual Data Worker")
 st.markdown("I can query databases, draw charts, and **read qualitative PDF reports.**")
 
 # --- 1.5 Enterprise UI Styling ---
