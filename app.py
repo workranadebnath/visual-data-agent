@@ -36,34 +36,13 @@ st.markdown("I can query databases, draw charts, and **read qualitative PDF repo
 # --- 1.5 Enterprise UI Styling ---
 st.markdown("""
 <style>
-    /* Hide Streamlit Default Branding */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
-    
-    /* Make the Sidebar look distinct */
-    [data-testid="stSidebar"] {
-        background-color: #0E1117;
-        border-right: 1px solid #333;
-    }
-    
-    /* Style the Chat Input Box */
-    [data-testid="stChatInput"] {
-        border: 1px solid #4CAF50 !important;
-        border-radius: 10px !important;
-    }
-    
-    /* Give user messages a subtle highlight */
-    [data-testid="stChatMessage"]:nth-child(odd) {
-        background-color: rgba(76, 175, 80, 0.1);
-        border-left: 3px solid #4CAF50;
-    }
-    
-    /* Clean up the expander boxes */
-    .streamlit-expanderHeader {
-        font-weight: bold;
-        color: #4CAF50;
-    }
+    [data-testid="stSidebar"] { background-color: #0E1117; border-right: 1px solid #333; }
+    [data-testid="stChatInput"] { border: 1px solid #4CAF50 !important; border-radius: 10px !important; }
+    [data-testid="stChatMessage"]:nth-child(odd) { background-color: rgba(76, 175, 80, 0.1); border-left: 3px solid #4CAF50; }
+    .streamlit-expanderHeader { font-weight: bold; color: #4CAF50; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -82,14 +61,12 @@ class AgentState(TypedDict):
 def get_visual_agent():
     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
 
-    # Track active tables to prevent schema bloat
+    # --- FIX 1: Agent now securely loads entire lists of active tables ---
     active_tables = []
-    # --- FIX 1: Change to active_sql_tables list ---
-    if "active_sql_tables" in st.session_state: 
+    if "active_sql_tables" in st.session_state:
         active_tables.extend(st.session_state["active_sql_tables"])
-    
-    if "last_uploaded_img" in st.session_state: 
-        active_tables.append(st.session_state["last_uploaded_img"])
+    if "active_img_tables" in st.session_state:
+        active_tables.extend(st.session_state["active_img_tables"])
 
     engine_kwargs = {"poolclass": NullPool}
 
@@ -209,7 +186,6 @@ def databricks_insert(table, conn, keys, data_iter):
                 formatted_row.append(f"'{val_str}'")
         values.append(f"({', '.join(formatted_row)})")
     
-    # Bulletproof syntax for Databricks dynamic naming
     escaped_keys = [f"`{k}`" for k in keys]
     sql_query = f"INSERT INTO `{table.name}` ({', '.join(escaped_keys)}) VALUES {', '.join(values)}"
     conn.execute(text(sql_query))
@@ -221,21 +197,20 @@ with st.sidebar:
     if "uploader_key" not in st.session_state:
         st.session_state["uploader_key"] = 0
         
+    # --- FIX 2: Initialize Lists in Memory ---
+    if "active_sql_tables" not in st.session_state: st.session_state["active_sql_tables"] = []
+    if "active_pdf_docs" not in st.session_state: st.session_state["active_pdf_docs"] = []
+    if "active_img_tables" not in st.session_state: st.session_state["active_img_tables"] = []
+        
     upload_type = st.selectbox(
         "Select Data Type to Upload:",
         ["Structured Data (CSV/Excel)", "Qualitative Report (PDF)", "Image / Receipt (PNG/JPG)"]
     )
-    
     st.divider()
 
     # --- Option 1: SQL/CSV/Excel ---
     if upload_type == "Structured Data (CSV/Excel)":
         st.subheader("Quantitative Data (DB)")
-        
-        # --- FIX 2: Initialize the memory list if it doesn't exist ---
-        if "active_sql_tables" not in st.session_state:
-            st.session_state["active_sql_tables"] = []
-            
         uploaded_sql_file = st.file_uploader(
             "Upload Datasets (CSV/Excel)", 
             type=["csv", "xlsx"], 
@@ -254,9 +229,10 @@ with st.sidebar:
                         df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
                         df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
                         
-                        # --- FIX 2b: Append to list instead of overwrite ---
-                        st.session_state["active_sql_tables"].append(clean_name)
-                        
+                        # Append to list
+                        if clean_name not in st.session_state["active_sql_tables"]:
+                            st.session_state["active_sql_tables"].append(clean_name)
+                            
                 elif uploaded_sql_file.name.endswith('.csv'):
                     df = pd.read_csv(uploaded_sql_file)
                     timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
@@ -265,8 +241,9 @@ with st.sidebar:
                     df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
                     df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
                     
-                    # --- FIX 2c: Append to list instead of overwrite ---
-                    st.session_state["active_sql_tables"].append(clean_name)
+                    # Append to list
+                    if clean_name not in st.session_state["active_sql_tables"]:
+                        st.session_state["active_sql_tables"].append(clean_name)
 
             get_visual_agent.clear() 
             st.session_state["uploader_key"] += 1
@@ -295,7 +272,7 @@ with st.sidebar:
                 splits = text_splitter.split_documents(pages)
                 
                 if not splits:
-                    st.error("⚠️ Could not extract any text from this PDF. Please ensure it is a text-based PDF (where you can highlight words) and not a scanned image.")
+                    st.error("⚠️ Could not extract text. Ensure it is a text-based PDF.")
                     os.remove(tmp_file_path)
                     st.stop()
                 
@@ -308,9 +285,10 @@ with st.sidebar:
                     st.stop()
                 
                 st.session_state["vector_store"] = vectorstore
+                if uploaded_pdf_file.name not in st.session_state["active_pdf_docs"]:
+                    st.session_state["active_pdf_docs"].append(uploaded_pdf_file.name)
                 os.remove(tmp_file_path)
 
-            st.session_state["last_uploaded_pdf"] = uploaded_pdf_file.name
             get_visual_agent.clear() 
             st.session_state["uploader_key"] += 1
             st.rerun()
@@ -356,7 +334,6 @@ with st.sidebar:
                     if not extracted_data:
                         st.warning("⚠️ No tabular data was found in this image.")
                     else:
-                        # Bulletproof JSON Parsing
                         if isinstance(extracted_data, dict):
                             first_key = list(extracted_data.keys())[0]
                             df = pd.DataFrame(extracted_data[first_key])
@@ -367,12 +344,14 @@ with st.sidebar:
                         
                         timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
                         file_brief = re.sub(r'[^a-zA-Z0-9_]', '_', uploaded_img_file.name.rsplit('.', 1)[0].lower())[:15]
-                        clean_name = f"table_{timestamp}_{file_brief}_img"
+                        clean_name = f"tbl_{timestamp}_{file_brief}_img"
                         
                         engine = create_engine(databricks_uri, poolclass=NullPool)
                         df.to_sql(clean_name, con=engine, if_exists="replace", index=False, method=databricks_insert)
                         
-                        st.session_state["last_uploaded_img"] = clean_name
+                        if clean_name not in st.session_state["active_img_tables"]:
+                            st.session_state["active_img_tables"].append(clean_name)
+                            
                         get_visual_agent.clear() 
                         st.session_state["uploader_key"] += 1
                         st.rerun()
@@ -382,19 +361,18 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"🛑 File Error: Could not process this image. Details: {e}")
 
-    # --- Persistent Memory Display ---
+    # --- FIX 3: Persistent Memory Loop Display ---
     st.divider()
     st.markdown("##### 🧠 Active System Memory")
     
-    # --- FIX 3: Loop through the list to display all tables ---
-    if "active_sql_tables" in st.session_state and st.session_state["active_sql_tables"]:
-        for tbl in st.session_state["active_sql_tables"]:
-            st.success(f"📊 DB: `{tbl}`")
-            
-    if "last_uploaded_pdf" in st.session_state:
-        st.success(f"📄 RAG: `{st.session_state['last_uploaded_pdf']}`")
-    if "last_uploaded_img" in st.session_state:
-        st.success(f"👁️ Vision: `{st.session_state['last_uploaded_img']}`")
+    for tbl in st.session_state.get("active_sql_tables", []):
+        st.success(f"📊 DB: `{tbl}`")
+        
+    for doc in st.session_state.get("active_pdf_docs", []):
+        st.success(f"📄 RAG: `{doc}`")
+        
+    for img_tbl in st.session_state.get("active_img_tables", []):
+        st.success(f"👁️ Vision: `{img_tbl}`")
 
 # --- 5. Instantiate Agent ---
 agent, chart_holder = get_visual_agent()
@@ -452,7 +430,6 @@ if prompt := st.chat_input("E.g., Based on the PDF, why did costs rise? Draw a c
                 
                 lg_messages.append(("user", prompt))
 
-                # Retry logic for 500 Server Errors
                 response = None
                 max_retries = 3
                 for attempt in range(max_retries):
@@ -477,7 +454,6 @@ if prompt := st.chat_input("E.g., Based on the PDF, why did costs rise? Draw a c
                 else:
                     final_text = str(raw_content)
 
-                # Bulletproof Security Gate Regex
                 if "SECURITY_CONFIRMATION_REQUIRED" in final_text:
                     tick3 = '```'
                     pattern = tick3 + r"(?:sql)?\n?(.*?)\n?" + tick3
@@ -494,7 +470,8 @@ if prompt := st.chat_input("E.g., Based on the PDF, why did costs rise? Draw a c
                         st.session_state.messages.append({"role": "assistant", "content": err_msg})
                 
                 else:
-                    generated_chart = chart_holder.get('current_fig', None) 
+                    generated_chart = chart_holder.get('current_fig', None)
+                    
                     if not final_text.strip():
                         if generated_chart:
                             final_text = "I successfully generated the chart based on the data."
