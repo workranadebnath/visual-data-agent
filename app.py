@@ -400,6 +400,12 @@ if "pending_action" in st.session_state and st.session_state["pending_action"]:
                 engine = create_engine(databricks_uri, poolclass=NullPool)
                 with engine.begin() as conn: 
                     conn.execute(text(action['sql']))
+                # --- NEW FIX: Erase the dropped table from System Memory ---
+                if "DROP" in action['sql'].upper():
+                    for key in ["active_sql_tables", "active_img_tables"]:
+                        if key in st.session_state:
+                            # Keep only the tables that are NOT mentioned in the drop query
+                            st.session_state[key] = [tbl for tbl in st.session_state[key] if tbl not in action['sql']]
                 get_visual_agent.clear() 
                 success_msg = "✅ **Confirmation received. Action executed, and memory refreshed.**"
                 st.balloons(); st.success(success_msg)
@@ -412,7 +418,7 @@ if "pending_action" in st.session_state and st.session_state["pending_action"]:
         if col2.button("❌ Reject"):
             st.info("Action cancelled."); st.session_state["pending_action"] = None; st.rerun()
 
-if prompt := st.chat_input("E.g., Based on the PDF, why did costs rise? Draw a chart of actual vs budget."):
+if prompt := st.chat_input("Ask Me Anything about Your Data..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
