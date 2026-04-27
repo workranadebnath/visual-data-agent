@@ -43,6 +43,8 @@ st.markdown("""
     [data-testid="stChatInput"] { border: 1px solid #4CAF50 !important; border-radius: 10px !important; }
     [data-testid="stChatMessage"]:nth-child(odd) { background-color: rgba(76, 175, 80, 0.1); border-left: 3px solid #4CAF50; }
     .streamlit-expanderHeader { font-weight: bold; color: #4CAF50; }
+    .st-emotion-cache-liupih { padding-left: 2rem;
+        padding-right: 2rem;padding: 2rem 1rem 1rem}
 </style>
 """, unsafe_allow_html=True)
 
