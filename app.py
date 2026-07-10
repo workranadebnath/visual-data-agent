@@ -52,8 +52,9 @@ db_host = st.secrets["DATABRICKS_HOST"]
 db_path = st.secrets["DATABRICKS_HTTP_PATH"]
 db_token = st.secrets["DATABRICKS_TOKEN"]
 
-# UPDATED: Removed hardcoded schema so agent can query bronze, silver, and gold
-databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=data_agent_app"
+# FIX: Set 'bronze' as the default landing schema so LangChain doesn't crash on startup.
+# The agent can still query silver and gold using 'silver.table_name' syntax.
+databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=data_agent_app&schema=bronze"
 
 class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
