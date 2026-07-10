@@ -158,7 +158,7 @@ def get_visual_agent():
     
     return workflow.compile(), chart_holder
 
-# --- UPDATED Helper Function for DB Inserts (Schema Aware) ---
+# --- UPDATED Helper Function for DB Inserts (Schema & Commit Aware) ---
 def databricks_insert(table, conn, keys, data_iter):
     values = []
     for row in data_iter: 
@@ -174,7 +174,16 @@ def databricks_insert(table, conn, keys, data_iter):
     schema_prefix = f"`{table.schema}`." if table.schema else ""
     escaped_keys = [f"`{k}`" for k in keys]
     sql_query = f"INSERT INTO {schema_prefix}`{table.name}` ({', '.join(escaped_keys)}) VALUES {', '.join(values)}"
-    conn.execute(text(sql_query))
+    
+    # 🚀 THE FIX: Force Databricks to auto-commit the insertion
+    conn.execute(text(sql_query).execution_options(autocommit=True))
+    
+    # Backup commit trigger
+    if hasattr(conn, 'commit'):
+        try:
+            conn.commit()
+        except:
+            pass
 
 # --- 4. Sidebar: Omni-Channel Ingestion ---
 with st.sidebar:
@@ -183,7 +192,7 @@ with st.sidebar:
     if "uploader_key" not in st.session_state:
         st.session_state["uploader_key"] = 0
         
-    # FIX: Initialize the Agent's memory with your Medallion Pipeline Views automatically
+    # Initialize the Agent's memory with your Medallion Pipeline Views automatically
     if "active_sql_tables" not in st.session_state: 
         st.session_state["active_sql_tables"] = [
             "bronze.all_raw_uploads",
@@ -223,18 +232,16 @@ with st.sidebar:
                         # Clean column names
                         df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
                         
-                        # APPEND to the standard bronze table
-                        df.to_sql("all_raw_uploads", schema="bronze", con=engine, if_exists="append", index=False, chunksize=2000, method=databricks_insert)
-                
-                # If we get here, it worked!
+                        # 🚀 THE FIX: Strict Transaction block to prevent silent rollback
+                        with engine.begin() as conn:
+                            df.to_sql("all_raw_uploads", schema="bronze", con=conn, if_exists="append", index=False, chunksize=2000, method=databricks_insert)
+                        
                 st.success("✅ Successfully pushed data to Databricks!")
-                time.sleep(1) # Pause for a second so you can see the success message
+                time.sleep(1)
                 get_visual_agent.clear() 
                 st.session_state["uploader_key"] += 1
                 st.rerun()
-
             except Exception as e:
-                # If it fails, this will catch the exact Databricks error
                 st.error(f"🚨 Databricks Upload Error: {e}")
 
     # --- Option 2: PDF RAG (Unchanged) ---
@@ -333,11 +340,16 @@ with st.sidebar:
                         full_name = f"bronze.{clean_name}"
                         
                         engine = create_engine(databricks_uri, poolclass=NullPool)
-                        df.to_sql(clean_name, schema="bronze", con=engine, if_exists="replace", index=False, method=databricks_insert)
+                        
+                        # 🚀 THE FIX applied to Vision tables as well
+                        with engine.begin() as conn:
+                            df.to_sql(clean_name, schema="bronze", con=conn, if_exists="replace", index=False, method=databricks_insert)
                         
                         if full_name not in st.session_state["active_img_tables"]:
                             st.session_state["active_img_tables"].append(full_name)
                             
+                        st.success("✅ Vision data successfully extracted and pushed to Databricks!")
+                        time.sleep(1)
                         get_visual_agent.clear() 
                         st.session_state["uploader_key"] += 1
                         st.rerun()
