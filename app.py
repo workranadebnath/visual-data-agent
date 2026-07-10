@@ -33,6 +33,27 @@ st.set_page_config(page_title="Visual Data Worker (Medallion Edition)", page_ico
 st.title("🥇 Visual Data Worker (Medallion Edition)")
 st.markdown("I process data through **Bronze, Silver, and Gold** layers, draw charts, and read PDFs.")
 
+if uploaded_sql_file is not None:
+    engine = create_engine(databricks_uri, poolclass=NullPool)
+    with st.spinner(f"Uploading '{uploaded_sql_file.name}' to Bronze Layer..."):
+        df = pd.read_csv(uploaded_sql_file)
+        
+        # Add metadata columns so you know where it came from
+        df['upload_timestamp'] = pd.Timestamp.now()
+        df['source_file'] = uploaded_sql_file.name
+        
+        # Clean column names
+        df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
+        
+        # APPEND to the standard bronze table
+        df.to_sql("all_raw_uploads", schema="bronze", con=engine, if_exists="append", index=False, chunksize=2000, method=databricks_insert)
+        
+        # Add the views to the Agent's memory so it knows they exist!
+        if "silver.cleaned_uploads" not in st.session_state["active_sql_tables"]:
+            st.session_state["active_sql_tables"].append("silver.cleaned_uploads")
+        if "gold.monthly_summary" not in st.session_state["active_sql_tables"]:
+            st.session_state["active_sql_tables"].append("gold.monthly_summary")
+
 # --- 1.5 Enterprise UI Styling ---
 st.markdown("""
 <style>
