@@ -210,26 +210,32 @@ with st.sidebar:
         )
         
         if uploaded_sql_file is not None:
-            engine = create_engine(databricks_uri, poolclass=NullPool)
-            with st.spinner(f"Uploading '{uploaded_sql_file.name}' to Bronze Layer..."):
-                if uploaded_sql_file.name.endswith('.csv'):
-                    df = pd.read_csv(uploaded_sql_file)
-                    
-                    # Add metadata columns so you know where it came from
-                    df['upload_timestamp'] = pd.Timestamp.now()
-                    df['source_file'] = uploaded_sql_file.name
-                    
-                    # Clean column names
-                    df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
-                    
-                    # APPEND to the standard bronze table
-                    df.to_sql("all_raw_uploads", schema="bronze", con=engine, if_exists="append", index=False, chunksize=2000, method=databricks_insert)
-                    
-                # Note: If you need Excel support back in, you can mirror the CSV append logic here
+            try:
+                engine = create_engine(databricks_uri, poolclass=NullPool)
+                with st.spinner(f"Uploading '{uploaded_sql_file.name}' to Bronze Layer..."):
+                    if uploaded_sql_file.name.endswith('.csv'):
+                        df = pd.read_csv(uploaded_sql_file)
+                        
+                        # Add metadata columns so you know where it came from
+                        df['upload_timestamp'] = pd.Timestamp.now()
+                        df['source_file'] = uploaded_sql_file.name
+                        
+                        # Clean column names
+                        df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
+                        
+                        # APPEND to the standard bronze table
+                        df.to_sql("all_raw_uploads", schema="bronze", con=engine, if_exists="append", index=False, chunksize=2000, method=databricks_insert)
+                
+                # If we get here, it worked!
+                st.success("✅ Successfully pushed data to Databricks!")
+                time.sleep(1) # Pause for a second so you can see the success message
+                get_visual_agent.clear() 
+                st.session_state["uploader_key"] += 1
+                st.rerun()
 
-            get_visual_agent.clear() 
-            st.session_state["uploader_key"] += 1
-            st.rerun()
+            except Exception as e:
+                # If it fails, this will catch the exact Databricks error
+                st.error(f"🚨 Databricks Upload Error: {e}")
 
     # --- Option 2: PDF RAG (Unchanged) ---
     elif upload_type == "Qualitative Report (PDF)":
