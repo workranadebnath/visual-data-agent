@@ -33,27 +33,6 @@ st.set_page_config(page_title="Visual Data Worker (Medallion Edition)", page_ico
 st.title("🥇 Visual Data Worker (Medallion Edition)")
 st.markdown("I process data through **Bronze, Silver, and Gold** layers, draw charts, and read PDFs.")
 
-if uploaded_sql_file is not None:
-    engine = create_engine(databricks_uri, poolclass=NullPool)
-    with st.spinner(f"Uploading '{uploaded_sql_file.name}' to Bronze Layer..."):
-        df = pd.read_csv(uploaded_sql_file)
-        
-        # Add metadata columns so you know where it came from
-        df['upload_timestamp'] = pd.Timestamp.now()
-        df['source_file'] = uploaded_sql_file.name
-        
-        # Clean column names
-        df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
-        
-        # APPEND to the standard bronze table
-        df.to_sql("all_raw_uploads", schema="bronze", con=engine, if_exists="append", index=False, chunksize=2000, method=databricks_insert)
-        
-        # Add the views to the Agent's memory so it knows they exist!
-        if "silver.cleaned_uploads" not in st.session_state["active_sql_tables"]:
-            st.session_state["active_sql_tables"].append("silver.cleaned_uploads")
-        if "gold.monthly_summary" not in st.session_state["active_sql_tables"]:
-            st.session_state["active_sql_tables"].append("gold.monthly_summary")
-
 # --- 1.5 Enterprise UI Styling ---
 st.markdown("""
 <style>
@@ -74,7 +53,6 @@ db_path = st.secrets["DATABRICKS_HTTP_PATH"]
 db_token = st.secrets["DATABRICKS_TOKEN"]
 
 # FIX: Set 'bronze' as the default landing schema so LangChain doesn't crash on startup.
-# The agent can still query silver and gold using 'silver.table_name' syntax.
 databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=data_agent_app&schema=bronze"
 
 class AgentState(TypedDict):
@@ -93,8 +71,6 @@ def get_visual_agent():
 
     engine_kwargs = {"poolclass": NullPool}
 
-    # Removed include_tables filter because SQLAlchemy struggles with cross-schema filtering.
-    # We will instead inject the active tables into the system prompt.
     db = SQLDatabase.from_uri(
         databricks_uri,
         sample_rows_in_table_info=0,
@@ -134,7 +110,6 @@ def get_visual_agent():
     
     tick3 = '```'
     
-    # UPDATED: Agent is now fully aware of the Medallion Architecture and dynamic memory
     custom_prefix = f"""You are an elite C-Suite Data Analyst managing a Medallion Architecture (Bronze, Silver, Gold). 
     
     AVAILABLE TABLES IN ACTIVE MEMORY (DO NOT QUERY TABLES NOT ON THIS LIST):
@@ -208,7 +183,14 @@ with st.sidebar:
     if "uploader_key" not in st.session_state:
         st.session_state["uploader_key"] = 0
         
-    if "active_sql_tables" not in st.session_state: st.session_state["active_sql_tables"] = []
+    # FIX: Initialize the Agent's memory with your Medallion Pipeline Views automatically
+    if "active_sql_tables" not in st.session_state: 
+        st.session_state["active_sql_tables"] = [
+            "bronze.all_raw_uploads",
+            "silver.cleaned_uploads",
+            "gold.monthly_summary"
+        ]
+        
     if "active_pdf_docs" not in st.session_state: st.session_state["active_pdf_docs"] = []
     if "active_img_tables" not in st.session_state: st.session_state["active_img_tables"] = []
         
@@ -230,34 +212,20 @@ with st.sidebar:
         if uploaded_sql_file is not None:
             engine = create_engine(databricks_uri, poolclass=NullPool)
             with st.spinner(f"Uploading '{uploaded_sql_file.name}' to Bronze Layer..."):
-                if uploaded_sql_file.name.endswith('.xlsx'):
-                    excel_data = pd.read_excel(uploaded_sql_file, sheet_name=None)
-                    for sheet_name, df in excel_data.items():
-                        timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M")
-                        file_brief = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())[:15]
-                        clean_name = f"tbl_{timestamp}_{file_brief}_raw"
-                        full_name = f"bronze.{clean_name}"
-                        
-                        df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
-                        # Target the bronze schema explicitly
-                        df.to_sql(clean_name, schema="bronze", con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
-                        
-                        if full_name not in st.session_state["active_sql_tables"]:
-                            st.session_state["active_sql_tables"].append(full_name)
-                            
-                elif uploaded_sql_file.name.endswith('.csv'):
+                if uploaded_sql_file.name.endswith('.csv'):
                     df = pd.read_csv(uploaded_sql_file)
-                    timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M")
-                    file_brief = re.sub(r'[^a-zA-Z0-9_]', '_', uploaded_sql_file.name.rsplit('.', 1)[0].lower())[:15]
-                    clean_name = f"tbl_{timestamp}_{file_brief}_raw"
-                    full_name = f"bronze.{clean_name}"
                     
+                    # Add metadata columns so you know where it came from
+                    df['upload_timestamp'] = pd.Timestamp.now()
+                    df['source_file'] = uploaded_sql_file.name
+                    
+                    # Clean column names
                     df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
-                    # Target the bronze schema explicitly
-                    df.to_sql(clean_name, schema="bronze", con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
                     
-                    if full_name not in st.session_state["active_sql_tables"]:
-                        st.session_state["active_sql_tables"].append(full_name)
+                    # APPEND to the standard bronze table
+                    df.to_sql("all_raw_uploads", schema="bronze", con=engine, if_exists="append", index=False, chunksize=2000, method=databricks_insert)
+                    
+                # Note: If you need Excel support back in, you can mirror the CSV append logic here
 
             get_visual_agent.clear() 
             st.session_state["uploader_key"] += 1
@@ -422,9 +390,8 @@ if "pending_action" in st.session_state and st.session_state["pending_action"]:
                         if key in st.session_state:
                             st.session_state[key] = [tbl for tbl in st.session_state[key] if tbl not in action['sql']]
                 
-                # NEW: If the agent generated a new Silver or Gold table via HITL, add it to memory!
+                # If the agent generated a new Silver or Gold table via HITL, add it to memory!
                 if "CREATE TABLE" in sql_upper or "INSERT INTO" in sql_upper:
-                    # Very simple regex to find silver.xxx or gold.xxx
                     matches = re.findall(r"(silver\.[a-zA-Z0-9_]+|gold\.[a-zA-Z0-9_]+)", action['sql'], re.IGNORECASE)
                     for match in matches:
                         table_name = match.lower()
@@ -542,23 +509,3 @@ if prompt := st.chat_input("Ask Me Anything about Your Data..."):
                     
             except Exception as e:
                 st.error(f"Error: {e}")
-
-# --- requirements.txt ---
-# streamlit
-# pandas==2.1.4
-# sqlalchemy
-# plotly
-# langchain
-# langchain-core
-# langchain-community
-# langchain-google-genai
-# langchain-experimental
-# langchain-text-splitters
-# databricks-sql-connector
-# databricks-sqlalchemy
-# openpyxl
-# langgraph
-# pypdf
-# faiss-cpu
-# sentence-transformers
-# pillow
