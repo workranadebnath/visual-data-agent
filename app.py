@@ -29,9 +29,9 @@ from typing import TypedDict, Annotated, Sequence
 from langchain_core.messages import BaseMessage, SystemMessage
 
 # --- 1. UI Setup ---
-st.set_page_config(page_title="Visual Data Worker", page_icon="📈", layout="wide")
-st.title("📈 Visual Data Worker")
-st.markdown("I can query databases, draw charts, and **read qualitative PDF reports.**")
+st.set_page_config(page_title="Visual Data Worker (Medallion Edition)", page_icon="📈", layout="wide")
+st.title("🥇 Visual Data Worker (Medallion Edition)")
+st.markdown("I process data through **Bronze, Silver, and Gold** layers, draw charts, and read PDFs.")
 
 # --- 1.5 Enterprise UI Styling ---
 st.markdown("""
@@ -52,7 +52,8 @@ db_host = st.secrets["DATABRICKS_HOST"]
 db_path = st.secrets["DATABRICKS_HTTP_PATH"]
 db_token = st.secrets["DATABRICKS_TOKEN"]
 
-databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=data_agent_app&schema=data_agent"
+# UPDATED: Removed hardcoded schema so agent can query bronze, silver, and gold
+databricks_uri = f"databricks://token:{db_token}@{db_host}:443?http_path={db_path}&catalog=data_agent_app"
 
 class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
@@ -62,7 +63,6 @@ class AgentState(TypedDict):
 def get_visual_agent():
     os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
 
-    # --- FIX 1: Agent now securely loads entire lists of active tables ---
     active_tables = []
     if "active_sql_tables" in st.session_state:
         active_tables.extend(st.session_state["active_sql_tables"])
@@ -71,19 +71,13 @@ def get_visual_agent():
 
     engine_kwargs = {"poolclass": NullPool}
 
-    if active_tables:
-        db = SQLDatabase.from_uri(
-            databricks_uri,
-            include_tables=active_tables,
-            sample_rows_in_table_info=0,
-            engine_args=engine_kwargs
-        )
-    else:
-        db = SQLDatabase.from_uri(
-            databricks_uri,
-            sample_rows_in_table_info=0,
-            engine_args=engine_kwargs
-        )
+    # Removed include_tables filter because SQLAlchemy struggles with cross-schema filtering.
+    # We will instead inject the active tables into the system prompt.
+    db = SQLDatabase.from_uri(
+        databricks_uri,
+        sample_rows_in_table_info=0,
+        engine_args=engine_kwargs
+    )
     
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash", 
@@ -117,35 +111,28 @@ def get_visual_agent():
         all_tools.append(retriever_tool)
     
     tick3 = '```'
-    custom_prefix = f"""You are an elite C-Suite Data Analyst. You have 3 main capabilities:
-    1. SQL DATABASE: Use SQL tools to extract quantitative numbers from Databricks. You MUST use Databricks Spark SQL syntax.
-    2. PDF DOCUMENTS: Use the 'search_company_reports' tool to find qualitative context, strategies, or explanations from uploaded PDFs.
-    3. DATA VISUALIZATION: Use the 'python_repl_ast' tool to draw charts.
     
-    SECURITY GATE (CRITICAL): You are STRICTLY FORBIDDEN from running 'INSERT', 'UPDATE', 'DELETE', or 'DROP' directly via tools. If the user asks you to modify data, reply ONLY with this exact format:
+    # UPDATED: Agent is now fully aware of the Medallion Architecture and dynamic memory
+    custom_prefix = f"""You are an elite C-Suite Data Analyst managing a Medallion Architecture (Bronze, Silver, Gold). 
+    
+    AVAILABLE TABLES IN ACTIVE MEMORY (DO NOT QUERY TABLES NOT ON THIS LIST):
+    {', '.join(active_tables) if active_tables else 'None currently uploaded.'}
+    
+    MEDALLION RULES:
+    1. BRONZE LAYER: Raw user data lands in the `bronze` schema. If a user asks to clean data (e.g., handle nulls, fix formats), you must write a SQL query to SELECT from bronze, fix it, and INSERT INTO the `silver` schema.
+    2. SILVER LAYER: Contains cleaned data in the `silver` schema. If a user asks for aggregated metrics (e.g., 'monthly sales'), create an aggregated table in the `gold` schema.
+    3. GOLD LAYER: The charting layer (`gold` schema). ALWAYS try to base Python/Plotly charts on gold or silver tables for performance.
+    
+    SECURITY GATE (CRITICAL): You are STRICTLY FORBIDDEN from running 'INSERT', 'UPDATE', 'DELETE', 'DROP', or 'CREATE' directly via tools. If the user asks you to modify or move data between layers, reply ONLY with this exact format:
     SECURITY_CONFIRMATION_REQUIRED
     {tick3}sql
     [query]
     {tick3}
     
     THE PLOTLY RULE: You must use plotly.express to draw charts. NEVER use matplotlib.
-    THE MEMORY RULE: To show the chart to the user, you MUST save the figure to the globally injected `chart_holder` dictionary under the exact key 'current_fig'. Do NOT use st.session_state!
-    THE HARDCODE RULE: The Python environment DOES NOT have access to the SQL tool's output variables. You MUST hardcode the data arrays explicitly.
+    THE MEMORY RULE: To show the chart to the user, you MUST save the figure to the globally injected `chart_holder` dictionary under the exact key 'current_fig'.
+    THE HARDCODE RULE: The Python environment DOES NOT have access to the SQL tool's output variables. You MUST hardcode the data arrays explicitly in the Python tool.
     THE SELF-HEALING RULE: If your python tool returns an error, read the error, fix your code, and run it again.
-    THE STRICT VISUALIZATION RULE: If the user asks for ANY kind of chart, graph, or plot, you MUST use the python_repl_ast tool to generate it. You are strictly forbidden from saying "Here is the chart" unless you have explicitly executed the Python code to create it!    
-    THE VOICE RULE: You must ALWAYS provide a plain-English explanation of your findings. Never return a blank response!
-    
-    Example Python code:
-    {tick3}python
-    import plotly.express as px
-    import pandas as pd
-    
-    shows = ['A', 'B', 'C']
-    hours = [10, 20, 30]
-    df = pd.DataFrame({{'Show': shows, 'Hours': hours}})
-    fig = px.bar(df, x='Hours', y='Show')
-    chart_holder['current_fig'] = fig
-    {tick3}
     
     Always combine context from the PDFs with hard data from the database if the user asks for both!"""
 
@@ -174,7 +161,7 @@ def get_visual_agent():
     
     return workflow.compile(), chart_holder
 
-# --- Helper Function for DB Inserts ---
+# --- UPDATED Helper Function for DB Inserts (Schema Aware) ---
 def databricks_insert(table, conn, keys, data_iter):
     values = []
     for row in data_iter: 
@@ -187,8 +174,9 @@ def databricks_insert(table, conn, keys, data_iter):
                 formatted_row.append(f"'{val_str}'")
         values.append(f"({', '.join(formatted_row)})")
     
+    schema_prefix = f"`{table.schema}`." if table.schema else ""
     escaped_keys = [f"`{k}`" for k in keys]
-    sql_query = f"INSERT INTO `{table.name}` ({', '.join(escaped_keys)}) VALUES {', '.join(values)}"
+    sql_query = f"INSERT INTO {schema_prefix}`{table.name}` ({', '.join(escaped_keys)}) VALUES {', '.join(values)}"
     conn.execute(text(sql_query))
 
 # --- 4. Sidebar: Omni-Channel Ingestion ---
@@ -198,7 +186,6 @@ with st.sidebar:
     if "uploader_key" not in st.session_state:
         st.session_state["uploader_key"] = 0
         
-    # --- FIX 2: Initialize Lists in Memory ---
     if "active_sql_tables" not in st.session_state: st.session_state["active_sql_tables"] = []
     if "active_pdf_docs" not in st.session_state: st.session_state["active_pdf_docs"] = []
     if "active_img_tables" not in st.session_state: st.session_state["active_img_tables"] = []
@@ -209,7 +196,7 @@ with st.sidebar:
     )
     st.divider()
 
-    # --- Option 1: SQL/CSV/Excel ---
+    # --- Option 1: SQL/CSV/Excel (Now routes to BRONZE) ---
     if upload_type == "Structured Data (CSV/Excel)":
         st.subheader("Quantitative Data (DB)")
         uploaded_sql_file = st.file_uploader(
@@ -220,37 +207,41 @@ with st.sidebar:
         
         if uploaded_sql_file is not None:
             engine = create_engine(databricks_uri, poolclass=NullPool)
-            with st.spinner(f"Uploading '{uploaded_sql_file.name}' to Databricks..."):
+            with st.spinner(f"Uploading '{uploaded_sql_file.name}' to Bronze Layer..."):
                 if uploaded_sql_file.name.endswith('.xlsx'):
                     excel_data = pd.read_excel(uploaded_sql_file, sheet_name=None)
                     for sheet_name, df in excel_data.items():
-                        timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+                        timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M")
                         file_brief = re.sub(r'[^a-zA-Z0-9_]', '_', sheet_name.lower())[:15]
-                        clean_name = f"tbl_{timestamp}_{file_brief}"
-                        df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
-                        df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
+                        clean_name = f"tbl_{timestamp}_{file_brief}_raw"
+                        full_name = f"bronze.{clean_name}"
                         
-                        # Append to list
-                        if clean_name not in st.session_state["active_sql_tables"]:
-                            st.session_state["active_sql_tables"].append(clean_name)
+                        df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
+                        # Target the bronze schema explicitly
+                        df.to_sql(clean_name, schema="bronze", con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
+                        
+                        if full_name not in st.session_state["active_sql_tables"]:
+                            st.session_state["active_sql_tables"].append(full_name)
                             
                 elif uploaded_sql_file.name.endswith('.csv'):
                     df = pd.read_csv(uploaded_sql_file)
-                    timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+                    timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M")
                     file_brief = re.sub(r'[^a-zA-Z0-9_]', '_', uploaded_sql_file.name.rsplit('.', 1)[0].lower())[:15]
-                    clean_name = f"tbl_{timestamp}_{file_brief}"
-                    df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
-                    df.to_sql(clean_name, con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
+                    clean_name = f"tbl_{timestamp}_{file_brief}_raw"
+                    full_name = f"bronze.{clean_name}"
                     
-                    # Append to list
-                    if clean_name not in st.session_state["active_sql_tables"]:
-                        st.session_state["active_sql_tables"].append(clean_name)
+                    df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
+                    # Target the bronze schema explicitly
+                    df.to_sql(clean_name, schema="bronze", con=engine, if_exists="replace", index=False, chunksize=2000, method=databricks_insert)
+                    
+                    if full_name not in st.session_state["active_sql_tables"]:
+                        st.session_state["active_sql_tables"].append(full_name)
 
             get_visual_agent.clear() 
             st.session_state["uploader_key"] += 1
             st.rerun()
 
-    # --- Option 2: PDF RAG ---
+    # --- Option 2: PDF RAG (Unchanged) ---
     elif upload_type == "Qualitative Report (PDF)":
         st.subheader("Qualitative Data (RAG)")
         uploaded_pdf_file = st.file_uploader(
@@ -262,7 +253,6 @@ with st.sidebar:
         if uploaded_pdf_file is not None:
             with st.spinner(f"Reading and vectorizing '{uploaded_pdf_file.name}'..."):
                 os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
-                
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
                     tmp_file.write(uploaded_pdf_file.getvalue())
                     tmp_file_path = tmp_file.name
@@ -294,7 +284,7 @@ with st.sidebar:
             st.session_state["uploader_key"] += 1
             st.rerun()
 
-    # --- Option 3: Vision ---
+    # --- Option 3: Vision (Now routes to BRONZE) ---
     elif upload_type == "Image / Receipt (PNG/JPG)":
         st.subheader("Image Extraction (Vision to DB)")
         uploaded_img_file = st.file_uploader(
@@ -314,12 +304,10 @@ with st.sidebar:
                     image_data_url = f"data:image/png;base64,{encoded_image}"
                     
                     vision_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
-                    
                     vision_prompt = """
                     Analyze this image carefully. If it is a receipt, invoice, or chart, extract the tabular data.
                     You MUST return ONLY a raw, valid JSON array of objects. Do not use markdown blocks like ```json.
-                    Make sure the keys are clean, lowercase strings (e.g., 'item_name', 'price', 'date').
-                    If you cannot find tabular data, return an empty array [].
+                    Make sure the keys are clean, lowercase strings. If you cannot find tabular data, return an empty array [].
                     """
                     
                     response = vision_llm.invoke([
@@ -343,15 +331,16 @@ with st.sidebar:
                             
                         df.columns = [re.sub(r'[^a-zA-Z0-9_]', '_', str(col)).lower() for col in df.columns]
                         
-                        timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+                        timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M")
                         file_brief = re.sub(r'[^a-zA-Z0-9_]', '_', uploaded_img_file.name.rsplit('.', 1)[0].lower())[:15]
-                        clean_name = f"tbl_{timestamp}_{file_brief}_img"
+                        clean_name = f"tbl_{timestamp}_{file_brief}_img_raw"
+                        full_name = f"bronze.{clean_name}"
                         
                         engine = create_engine(databricks_uri, poolclass=NullPool)
-                        df.to_sql(clean_name, con=engine, if_exists="replace", index=False, method=databricks_insert)
+                        df.to_sql(clean_name, schema="bronze", con=engine, if_exists="replace", index=False, method=databricks_insert)
                         
-                        if clean_name not in st.session_state["active_img_tables"]:
-                            st.session_state["active_img_tables"].append(clean_name)
+                        if full_name not in st.session_state["active_img_tables"]:
+                            st.session_state["active_img_tables"].append(full_name)
                             
                         get_visual_agent.clear() 
                         st.session_state["uploader_key"] += 1
@@ -362,18 +351,19 @@ with st.sidebar:
             except Exception as e:
                 st.error(f"🛑 File Error: Could not process this image. Details: {e}")
 
-    # --- FIX 3: Persistent Memory Loop Display ---
+    # Persistent Memory Loop Display
     st.divider()
     st.markdown("##### 🧠 Active System Memory")
     
     for tbl in st.session_state.get("active_sql_tables", []):
-        st.success(f"📊 DB: `{tbl}`")
+        layer = "🥉" if "bronze." in tbl else "🥈" if "silver." in tbl else "🥇" if "gold." in tbl else "📊"
+        st.success(f"{layer} `{tbl}`")
         
     for doc in st.session_state.get("active_pdf_docs", []):
         st.success(f"📄 RAG: `{doc}`")
         
     for img_tbl in st.session_state.get("active_img_tables", []):
-        st.success(f"👁️ Vision: `{img_tbl}`")
+        st.success(f"👁️ Vision (🥉): `{img_tbl}`")
 
 # --- 5. Instantiate Agent ---
 agent, chart_holder = get_visual_agent()
@@ -389,7 +379,7 @@ for message in st.session_state.messages:
             st.plotly_chart(message["chart"], use_container_width=True)
         st.markdown(message["content"])
 
-# --- 7. Execution Loop & HITL Security ---
+# --- 7. Execution Loop & HITL Security (UPDATED to track Silver/Gold creations) ---
 if "pending_action" in st.session_state and st.session_state["pending_action"]:
     action = st.session_state["pending_action"]
     with st.chat_message("assistant"):
@@ -401,14 +391,26 @@ if "pending_action" in st.session_state and st.session_state["pending_action"]:
                 engine = create_engine(databricks_uri, poolclass=NullPool)
                 with engine.begin() as conn: 
                     conn.execute(text(action['sql']))
-                # --- NEW FIX: Erase the dropped table from System Memory ---
-                if "DROP" in action['sql'].upper():
+                
+                sql_upper = action['sql'].upper()
+                
+                # If they dropped a table, remove it from memory
+                if "DROP" in sql_upper:
                     for key in ["active_sql_tables", "active_img_tables"]:
                         if key in st.session_state:
-                            # Keep only the tables that are NOT mentioned in the drop query
                             st.session_state[key] = [tbl for tbl in st.session_state[key] if tbl not in action['sql']]
+                
+                # NEW: If the agent generated a new Silver or Gold table via HITL, add it to memory!
+                if "CREATE TABLE" in sql_upper or "INSERT INTO" in sql_upper:
+                    # Very simple regex to find silver.xxx or gold.xxx
+                    matches = re.findall(r"(silver\.[a-zA-Z0-9_]+|gold\.[a-zA-Z0-9_]+)", action['sql'], re.IGNORECASE)
+                    for match in matches:
+                        table_name = match.lower()
+                        if table_name not in st.session_state["active_sql_tables"]:
+                            st.session_state["active_sql_tables"].append(table_name)
+
                 get_visual_agent.clear() 
-                success_msg = "✅ **Confirmation received. Action executed, and memory refreshed.**"
+                success_msg = "✅ **Confirmation received. Action executed, and memory updated.**"
                 st.balloons(); st.success(success_msg)
                 st.session_state.messages.append({"role": "assistant", "content": success_msg})
                 st.session_state["pending_action"] = None
